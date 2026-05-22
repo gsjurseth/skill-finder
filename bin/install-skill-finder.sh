@@ -53,17 +53,17 @@ set -u
 # the bundle as an asset. Defaults to a fixed value so a typical
 # `curl | bash` works without flags. Override with --release for
 # pinning or testing.
-DEFAULT_RELEASE_TAG="v0.1.4"
+DEFAULT_RELEASE_TAG="v0.1.5"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
 # Bundle filename inside the GitHub Release assets.
-BUNDLE_FILENAME="skill-finder-0.1.4.skill"
+BUNDLE_FILENAME="skill-finder-0.1.5.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-finder-0.1.0.skill
 # A mismatch here means the bundle hosted on GitHub does not
 # match what the release author signed off on.
-PINNED_BUNDLE_SHA256="58a219b1d731f4698e8a0b9782bcd7ebbf4dcab28387c8f7aea3cf58d2cbfb18"
+PINNED_BUNDLE_SHA256="cb912b74b1d4b6d6d425ed0fd59cc964780be91c39dd004301d41d65ce6801b7"
 
 # sha256 of the trust root PEM file that ships INSIDE the
 # bundle (keys/trusted_pubkey.pem). Recompute at release time:

@@ -45,14 +45,14 @@ set -u
 # ===============================================================
 # Release pins — UPDATE THESE WITH EVERY RELEASE
 # ===============================================================
-DEFAULT_RELEASE_TAG="v0.1.4"
+DEFAULT_RELEASE_TAG="v0.1.5"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
-BUNDLE_FILENAME="skill-publisher-0.1.4.skill"
+BUNDLE_FILENAME="skill-publisher-0.1.5.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-publisher-0.1.0.skill
-PINNED_BUNDLE_SHA256="cd174417f8b47c2be724554cf318985006bc3af171f62d0fac305299bf9636c0"
+PINNED_BUNDLE_SHA256="98439bffd91958eafffaec8fad573ab2bbae54e4f0ede5aae3df9d206548a091"
 
 # Python runtime deps used by the four scripts/* modules that
 # publish.sh invokes. Same set as skill-finder; kept independent

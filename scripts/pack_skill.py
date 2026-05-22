@@ -12,20 +12,26 @@ Pipeline:
 
   1. Validate that ``src`` is a directory and contains at least
      ``SKILL.md``.
-  2. Scan ``src/scripts/`` (if present) for any Python file that
+  2. Validate ``SKILL.md`` itself: YAML frontmatter on line 1,
+     properly delimited, parseable, with required keys, and a
+     ``name:`` field that matches the source directory name. See
+     ``_validate_skill_md_frontmatter`` for the full rule set.
+     This catches author-side mistakes that would otherwise ship
+     broken bundles -- e.g. unquoted colons mid-description (which
+     break PyYAML), or a preamble before ``---`` (which makes
+     Gemini CLI silently skip the skill).
+  3. Scan ``src/scripts/`` (if present) for any Python file that
      contains an import from ``common.*``. If at least one is
-     found, the build MUST embed the five canonical
-     ``scripts/common/*`` files alongside the skill's own scripts.
-  3. When embedding, assert that the source repo's
-     ``scripts/common/`` directory contains exactly the five
-     expected files (``__init__.py``, ``canonical.py``,
-     ``permission_resolver.py``, ``watcher_probe.py``,
-     ``manifest_schema.py``). A missing file is a build error
-     (we'd ship a half-vendored module). An extra file is also
-     a build error (we'd ship something the runtime hasn't been
-     audited for — the public surface of ``common/`` is locked).
-  4. Write the zip in a deterministic order (sorted paths) so
-     ``sha256(zip)`` is stable across builds — this is what the
+     found, the build MUST embed the canonical ``scripts/common/*``
+     files alongside the skill's own scripts.
+  4. When embedding, assert that the source repo's
+     ``scripts/common/`` directory contains exactly the expected
+     file set. A missing file is a build error (we'd ship a
+     half-vendored module). An extra file is also a build error
+     (we'd ship something the runtime hasn't been audited for --
+     the public surface of ``common/`` is locked).
+  5. Write the zip in a deterministic order (sorted paths) so
+     ``sha256(zip)`` is stable across builds -- this is what the
      ``zip_sha256`` field in the manifest commits to.
 
 Exit codes:
@@ -33,7 +39,7 @@ Exit codes:
   1 user error
   2 system error (FS write failure)
   3 packaging-policy violation (missing/extra files in
-    ``scripts/common/``, missing SKILL.md, etc.)
+    ``scripts/common/``, missing or malformed SKILL.md, etc.)
 """
 from __future__ import annotations
 
@@ -43,6 +49,8 @@ import sys
 import zipfile
 from pathlib import Path
 from typing import Iterable, Sequence
+
+import yaml
 
 EXIT_OK = 0
 EXIT_USER = 1
@@ -158,6 +166,159 @@ def _assert_common_surface(common_dir: Path) -> None:
         )
 
 
+# Required keys in the SKILL.md frontmatter. These are what the
+# consuming runtime injects into the system prompt at session start
+# (or skill activation): name + description. A skill missing either
+# is unusable -- the agent has no way to refer to it.
+_REQUIRED_FRONTMATTER_KEYS: frozenset[str] = frozenset({
+    "name",
+    "description",
+})
+
+
+def _validate_skill_md_frontmatter(skill_md_path: Path) -> None:
+    """Refuse to pack if SKILL.md's YAML frontmatter is malformed
+    or doesn't match the parent skill directory's name.
+
+    Rules enforced (each one corresponds to a class of bug that has
+    actually been observed in this project's history):
+
+      1. Line 1 of the file must be ``---``. Any preamble (HTML
+         comments, BOM, blank lines, prose) makes Gemini CLI's
+         frontmatter parser silently skip the skill; the directory
+         is discovered but the skill never appears in /skills list.
+         This was the v0.1.0-v0.1.3 sentinel-comment bug fixed in
+         v0.1.4.
+
+      2. The frontmatter block must be properly delimited -- the
+         second ``---`` must exist somewhere later in the file.
+
+      3. The frontmatter must parse with ``yaml.safe_load`` without
+         raising. The most common author mistake is an unquoted
+         multi-line scalar containing a colon followed by a space
+         (PyYAML interprets the colon as a nested mapping key and
+         raises ScannerError). This was the very first bug we hit
+         in this project's history.
+
+      4. The parsed frontmatter must be a dict, not a list / scalar
+         / None. YAML edge cases (e.g. a top-level ``-`` turning
+         everything into a list) sometimes produce non-dict roots.
+
+      5. Required keys (``name``, ``description``) must be present
+         and non-empty. These are what runtimes inject into the
+         system prompt; missing them makes the skill unusable.
+
+      6. ``name`` must match the parent directory name. If the
+         skill lives at ``skills/foo-bar/`` then frontmatter must
+         have ``name: foo-bar``. Mismatches confuse /skills enable
+         (which uses the directory name) and the activation flow
+         (which uses the frontmatter name).
+
+    Raises ValueError with an actionable message on any failure.
+    The caller surfaces the message and exits with EXIT_POLICY.
+    """
+    expected_name = skill_md_path.parent.name
+    raw_bytes = skill_md_path.read_bytes()
+
+    # Strip a UTF-8 BOM if present. PyYAML handles BOMs fine but
+    # the "line 1 must be ---" check would fail on a BOM-prefixed
+    # line. Be lenient with BOMs since they're invisible to authors
+    # editing in some Windows tools; reject everything else loudly.
+    if raw_bytes.startswith(b"\xef\xbb\xbf"):
+        raw_bytes = raw_bytes[3:]
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"SKILL.md is not valid UTF-8: {exc}"
+        ) from exc
+
+    lines = text.splitlines()
+    if not lines:
+        raise ValueError("SKILL.md is empty")
+
+    # Rule 1: line 1 must be exactly ---. Strip trailing whitespace
+    # only; leading whitespace is significant (would indicate
+    # indentation, which is invalid for a YAML doc delimiter).
+    if lines[0].rstrip() != "---":
+        raise ValueError(
+            "SKILL.md frontmatter must start with '---' on line 1 "
+            "(no preamble allowed). Got line 1: "
+            f"{lines[0][:80]!r}. Gemini CLI silently skips skills "
+            "whose SKILL.md has any preamble before the opening "
+            "'---' delimiter; the skill will appear installed but "
+            "won't show up in /skills list."
+        )
+
+    # Rule 2: find the closing --- delimiter.
+    fm_end = None
+    for i, line in enumerate(lines[1:], start=1):
+        if line.rstrip() == "---":
+            fm_end = i
+            break
+    if fm_end is None:
+        raise ValueError(
+            "SKILL.md frontmatter has no closing '---' delimiter. "
+            "Expected the second '---' to appear somewhere after "
+            f"line 1. Read {len(lines)} lines without finding it."
+        )
+
+    fm_text = "\n".join(lines[1:fm_end])
+
+    # Rule 3: must parse as YAML.
+    try:
+        parsed = yaml.safe_load(fm_text)
+    except yaml.YAMLError as exc:
+        # PyYAML's error messages include line+column info that's
+        # extremely useful for the author. Pass it through verbatim.
+        raise ValueError(
+            f"SKILL.md frontmatter is not valid YAML: {exc}. "
+            "Most common cause: an unquoted multi-line description "
+            "that contains a colon followed by a space (PyYAML "
+            "reads it as a nested mapping key). Quote the description "
+            "or reword to remove the embedded colon."
+        ) from exc
+
+    # Rule 4: must be a dict (mapping at the YAML root).
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"SKILL.md frontmatter must be a YAML mapping (dict), "
+            f"got {type(parsed).__name__}: {parsed!r:.120}"
+        )
+
+    # Rule 5: required keys present and non-empty.
+    missing = []
+    empty = []
+    for key in sorted(_REQUIRED_FRONTMATTER_KEYS):
+        if key not in parsed:
+            missing.append(key)
+        elif not parsed[key] or (
+            isinstance(parsed[key], str) and not parsed[key].strip()
+        ):
+            empty.append(key)
+    if missing:
+        raise ValueError(
+            "SKILL.md frontmatter is missing required keys: "
+            f"{sorted(missing)}. Required: "
+            f"{sorted(_REQUIRED_FRONTMATTER_KEYS)}."
+        )
+    if empty:
+        raise ValueError(
+            "SKILL.md frontmatter has empty values for required keys: "
+            f"{sorted(empty)}."
+        )
+
+    # Rule 6: name must match parent directory.
+    if parsed["name"] != expected_name:
+        raise ValueError(
+            f"SKILL.md frontmatter 'name' is {parsed['name']!r} but "
+            f"the parent directory is named {expected_name!r}. "
+            "The two must match. Either rename the directory to "
+            f"{parsed['name']!r} or change the frontmatter 'name' "
+            f"to {expected_name!r}."
+        )
+
+
 def _iter_files(root: Path) -> Iterable[Path]:
     """Yield every regular file under ``root``, recursively,
     skipping bytecode caches. Order is determined by the caller
@@ -207,8 +368,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not src.is_dir():
         _err(quiet, f"error: --src is not a directory: {src}")
         return EXIT_USER
-    if not (src / "SKILL.md").is_file():
+    skill_md = src / "SKILL.md"
+    if not skill_md.is_file():
         _err(quiet, f"error: SKILL.md missing from {src}")
+        return EXIT_POLICY
+
+    # Validate SKILL.md's YAML frontmatter before we go any further.
+    # A malformed frontmatter at pack time becomes a silent failure
+    # at install time (Gemini CLI skips the skill) or a noisy failure
+    # at install time (find_install.py raises ScannerError). Catching
+    # it here means the author sees the problem on THEIR machine
+    # before the bundle is signed and shipped.
+    try:
+        _validate_skill_md_frontmatter(skill_md)
+    except ValueError as exc:
+        _err(quiet, f"error: {exc}")
         return EXIT_POLICY
 
     # Resolve the repo root that owns scripts/common/. The default

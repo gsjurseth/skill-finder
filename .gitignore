@@ -1,0 +1,55 @@
+# =============================================================
+# CRITICAL: never commit signing material.
+# =============================================================
+# Private signing keys (raw 32-byte ed25519 keys, PEM-encoded
+# keys, JKS / PKCS12 stores, anything that smells like a key).
+*.priv
+*.key
+*.pem
+*signing*
+*.jks
+*.p12
+*.pfx
+*.keystore
+.signing/
+secrets/
+config.env
+
+# ADC token caches and gcloud config (should never be in a repo
+# but pin it just in case).
+.config/gcloud/
+application_default_credentials.json
+
+# =============================================================
+# Build artifacts and packed bundles
+# =============================================================
+# Packed skill bundles. These get attached to GitHub Releases
+# at release time; they should NOT live in the repo.
+*.skill
+/dist/
+/build/
+
+# =============================================================
+# Python
+# =============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+env/
+
+# =============================================================
+# OS / editor cruft
+# =============================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml

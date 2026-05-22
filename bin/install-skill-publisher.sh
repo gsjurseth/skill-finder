@@ -45,14 +45,14 @@ set -u
 # ===============================================================
 # Release pins — UPDATE THESE WITH EVERY RELEASE
 # ===============================================================
-DEFAULT_RELEASE_TAG="v0.1.0"
+DEFAULT_RELEASE_TAG="v0.1.1"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
-BUNDLE_FILENAME="skill-publisher-0.1.0.skill"
+BUNDLE_FILENAME="skill-publisher-0.1.1.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-publisher-0.1.0.skill
-PINNED_BUNDLE_SHA256="67cee93c116e8eb1cc2571eabebcbbc65a9012ed414ccf483d90c9dfc2106550"
+PINNED_BUNDLE_SHA256="4082abdf6c07efaf8be1db73601489a9d1ae5a12926dd437d4fc11899bc34f1c"
 
 # Python runtime deps used by the four scripts/* modules that
 # publish.sh invokes. Same set as skill-finder; kept independent
@@ -103,14 +103,11 @@ err() { echo "[install] $*" >&2; }
 # Step 1: detect runtime and resolve install root
 # ===============================================================
 if [ -z "$RUNTIME" ]; then
+  # See install-skill-finder.sh for the full detection-order rationale.
   if [ -d "$HOME/.config/opencode/skills" ]; then
     RUNTIME="opencode"
-  elif [ -d "$HOME/.gemini/config/skills" ]; then
-    if [ -d "$HOME/.gemini/antigravity-browser-profile" ]; then
-      RUNTIME="antigravity"
-    else
-      RUNTIME="gemini"
-    fi
+  elif [ -d "$HOME/.gemini/antigravity-browser-profile" ]; then
+    RUNTIME="antigravity"
   elif [ -d "$HOME/.gemini" ]; then
     RUNTIME="gemini"
   else
@@ -121,7 +118,9 @@ fi
 
 case "$RUNTIME" in
   opencode)    DEFAULT_INSTALL_ROOT="$HOME/.config/opencode/skills" ;;
-  gemini)      DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills" ;;
+  # Gemini CLI: canonical user-skills root per docs/cli/skills.md.
+  gemini)      DEFAULT_INSTALL_ROOT="$HOME/.gemini/skills" ;;
+  # Antigravity: undocumented; override with --install-root if wrong.
   antigravity) DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills" ;;
   *)
     err "FATAL: --runtime must be opencode | gemini | antigravity (got: $RUNTIME)"

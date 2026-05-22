@@ -53,17 +53,17 @@ set -u
 # the bundle as an asset. Defaults to a fixed value so a typical
 # `curl | bash` works without flags. Override with --release for
 # pinning or testing.
-DEFAULT_RELEASE_TAG="v0.1.0"
+DEFAULT_RELEASE_TAG="v0.1.1"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
 # Bundle filename inside the GitHub Release assets.
-BUNDLE_FILENAME="skill-finder-0.1.0.skill"
+BUNDLE_FILENAME="skill-finder-0.1.1.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-finder-0.1.0.skill
 # A mismatch here means the bundle hosted on GitHub does not
 # match what the release author signed off on.
-PINNED_BUNDLE_SHA256="5d028ab55d3e4b3e7046355efcf25c3f1fa183feb5d85b720b3339960b0dadbd"
+PINNED_BUNDLE_SHA256="c10fb4a78bc71bccb342e51cbe16cfcbbf23f8265d9591157fa9b5b8961bdcd3"
 
 # sha256 of the trust root PEM file that ships INSIDE the
 # bundle (keys/trusted_pubkey.pem). Recompute at release time:
@@ -133,17 +133,24 @@ if [ -z "$RUNTIME" ]; then
   # Heuristic detection. The operator can always override with
   # --runtime. We pick the first directory that already exists,
   # falling back to opencode.
+  # Detection order:
+  #   1. OpenCode if its skills dir exists.
+  #   2. Antigravity if its browser-profile marker exists. Note:
+  #      Antigravity's actual skills install root is not publicly
+  #      documented at the time of writing; we currently use
+  #      ~/.gemini/config/skills which is what the dev install
+  #      uses on this maintainer's machine. If you're running
+  #      Antigravity and the install lands in the wrong place,
+  #      pass --install-root explicitly.
+  #   3. Gemini CLI: canonical user-skills root is ~/.gemini/skills
+  #      per https://github.com/google-gemini/gemini-cli/blob/main/
+  #      docs/cli/skills.md ("User skills: Located in
+  #      ~/.gemini/skills/ or the ~/.agents/skills/ alias").
+  #   4. Fallback to opencode.
   if [ -d "$HOME/.config/opencode/skills" ]; then
     RUNTIME="opencode"
-  elif [ -d "$HOME/.gemini/config/skills" ]; then
-    # Antigravity and Gemini CLI share ~/.gemini/config/skills as
-    # the canonical install root. Pick antigravity here only if a
-    # marker dir exists; otherwise fall through to gemini.
-    if [ -d "$HOME/.gemini/antigravity-browser-profile" ]; then
-      RUNTIME="antigravity"
-    else
-      RUNTIME="gemini"
-    fi
+  elif [ -d "$HOME/.gemini/antigravity-browser-profile" ]; then
+    RUNTIME="antigravity"
   elif [ -d "$HOME/.gemini" ]; then
     RUNTIME="gemini"
   else
@@ -157,9 +164,16 @@ case "$RUNTIME" in
     DEFAULT_INSTALL_ROOT="$HOME/.config/opencode/skills"
     ;;
   gemini)
-    DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills"
+    # Per Gemini CLI docs (docs/cli/skills.md), user skills live at
+    # ~/.gemini/skills/. NOT ~/.gemini/config/skills/ (that was a
+    # v0.1.0 bug -- see release notes for v0.1.1).
+    DEFAULT_INSTALL_ROOT="$HOME/.gemini/skills"
     ;;
   antigravity)
+    # Antigravity's canonical install root is undocumented at the
+    # time of writing. Using ~/.gemini/config/skills based on a
+    # dev install; override with --install-root if your Antigravity
+    # version reads from a different path.
     DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills"
     ;;
   *)

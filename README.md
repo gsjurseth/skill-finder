@@ -75,28 +75,74 @@ export APIHUB_LOCATION=<your-apihub-region>     # e.g. us-west1
 
 ### Gemini CLI
 
-```bash
-# 1. Install.
-curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
-  | bash -s -- --runtime gemini
+Gemini CLI 0.38+ has a [first-class skills
+system](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md)
+with its own installer (`gemini skills install <git-url>`) and a
+`/skills` slash command. If you're using Gemini CLI specifically,
+its native installer is the recommended path — it handles the
+"discovery tier" automatically:
 
-# 2. Authenticate with Google Cloud.
+```bash
+# Recommended: use Gemini CLI's native installer.
+gemini skills install https://github.com/gsjurseth/skill-finder.git \
+  --path skills/skill-finder \
+  --scope user
+
+# (Optionally) install skill-publisher too.
+gemini skills install https://github.com/gsjurseth/skill-finder.git \
+  --path skills/skill-publisher \
+  --scope user
+
+# Confirm both are discovered.
+gemini skills list
+```
+
+The native installer does NOT, however, run our PEP 668 venv
+setup. You still need the Python deps available somewhere the
+scripts can import them. Either:
+
+- Run `bin/install-skill-finder.sh --runtime gemini` first to set
+  up the venv (it'll also install a duplicate copy of the skill
+  at `~/.gemini/skills/skill-finder`, which Gemini CLI will then
+  prefer over the `gemini skills install` copy at the same path —
+  effectively a no-op for discovery), OR
+- Create the venv manually:
+  ```bash
+  python3 -m venv ~/.local/share/skill-finder/venv
+  ~/.local/share/skill-finder/venv/bin/pip install \
+    cryptography google-auth requests pyyaml
+  ```
+
+After the install, set your catalog coordinates and use it:
+
+```bash
+# Authenticate with Google Cloud.
 gcloud auth application-default login
 
-# 3. Point at the catalog.
+# Point at the catalog.
 export APIHUB_PROJECT=<your-gcp-project-id>
 export APIHUB_LOCATION=<your-apihub-region>
 
-# 4. Sanity check (note the different install root vs OpenCode).
-~/.gemini/config/skills/skill-finder/bin/run-with-venv.sh \
-  ~/.gemini/config/skills/skill-finder/scripts/list_skills.py \
+# In a Gemini CLI session, ask in natural language.
+# Gemini CLI auto-loads skills at session start; use
+# /skills reload if you installed mid-session.
+```
+
+If you can't (or don't want to) use `gemini skills install`, our
+installer also works for Gemini CLI — just pass `--runtime gemini`
+and it installs to `~/.gemini/skills/` (Gemini CLI's canonical
+user-skills tier per the docs).
+
+```bash
+# Alternative: use our installer (handles venv setup automatically).
+curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
+  | bash -s -- --runtime gemini
+
+# Sanity check via the wrapper.
+~/.gemini/skills/skill-finder/bin/run-with-venv.sh \
+  ~/.gemini/skills/skill-finder/scripts/list_skills.py \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
-
-# 5. In a Gemini CLI session, ask in natural language. Gemini CLI
-#    does NOT support /reload-skills; instead, send a follow-up
-#    message after the first install and the runtime will
-#    re-inject the skill list on the next turn.
 ```
 
 ### Antigravity
@@ -113,17 +159,24 @@ gcloud auth application-default login
 export APIHUB_PROJECT=<your-gcp-project-id>
 export APIHUB_LOCATION=<your-apihub-region>
 
-# 4. Sanity check (Antigravity shares the install root with
-#    Gemini CLI at ~/.gemini/config/skills).
+# 4. Sanity check.
 ~/.gemini/config/skills/skill-finder/bin/run-with-venv.sh \
   ~/.gemini/config/skills/skill-finder/scripts/list_skills.py \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
 
-# 5. In an Antigravity session, ask in natural language. Same as
-#    Gemini CLI: no /reload-skills; send a follow-up to trigger
-#    re-injection.
+# 5. In an Antigravity session, ask in natural language. The
+#    runtime re-injects skills on each turn so no /reload command
+#    is needed -- just send a follow-up message after install.
 ```
+
+> **Note on the Antigravity install path:** unlike Gemini CLI and
+> OpenCode, Antigravity's canonical user-skills directory isn't
+> publicly documented at the time of writing. We default to
+> `~/.gemini/config/skills/` based on what an Antigravity dev
+> install puts there. If your Antigravity build reads from a
+> different path, pass `--install-root <path>` to override, or
+> use Antigravity's own skill-install command if it has one.
 
 ---
 
@@ -142,7 +195,7 @@ the catalog with anything important.
 # 2. List the catalog. Every entry must show a signing_key_id
 #    that matches your trust root's fingerprint. Use the venv
 #    wrapper (substitute the install root if you didn't pick
-#    OpenCode: Gemini CLI / Antigravity use ~/.gemini/config/skills).
+#    OpenCode: Gemini CLI uses ~/.gemini/skills; Antigravity uses ~/.gemini/config/skills).
 ~/.config/opencode/skills/skill-finder/bin/run-with-venv.sh \
   ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
   --project "$APIHUB_PROJECT" \
@@ -306,8 +359,8 @@ Default install roots per runtime:
 | Runtime | Default install root |
 |:---|:---|
 | `opencode` | `~/.config/opencode/skills` |
-| `gemini` | `~/.gemini/config/skills` |
-| `antigravity` | `~/.gemini/config/skills` |
+| `gemini` | `~/.gemini/skills` (per [Gemini CLI docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md)) |
+| `antigravity` | `~/.gemini/config/skills` (undocumented; override with `--install-root` if wrong) |
 
 ### Python environment
 
@@ -380,6 +433,7 @@ in `~/.bashrc` / `~/.zshrc` so they survive shell restarts.
 | `existing venv at … is broken; removing and recreating` (informational) | A previous installer run was interrupted before pip could be installed into the venv. The installer detected the half-built state and is rebuilding. | No action needed. |
 | `FATAL: bundle sha256 mismatch` (exit 3) | The bundle on GitHub is not the one the installer was built to trust. Either: (a) tampering, or (b) you're running an old installer against a new release. | Re-fetch the installer from the same release as the bundle. Do NOT bypass the check. |
 | `FATAL: trust root sha256 mismatch` (exit 3) | The bundle's embedded `trusted_pubkey.pem` is not the one the installer expects. This is the most serious failure — it means the signing-key trust root would have changed silently. | Do not install. File an issue. Cross-check the fingerprint with the maintainers out-of-band before proceeding. |
+| Install succeeded but Gemini CLI doesn't see the skill (not in `/skills list`) | Two common causes. (1) You're on a pre-v0.1.1 release of this installer, which installed Gemini-runtime skills to `~/.gemini/config/skills/` instead of `~/.gemini/skills/`. (2) Your Gemini CLI version predates the skills feature. | (1) Either upgrade to v0.1.1+ of this installer and re-run, OR move the directory: `mkdir -p ~/.gemini/skills && mv ~/.gemini/config/skills/skill-finder ~/.gemini/skills/` then run `/skills reload` in the CLI. (2) Upgrade Gemini CLI to >= 0.38 and verify with `gemini skills --help`. |
 | `match: NONE — zero skills met minimum keyword overlap` from `find_install.py` | Your query does not share any tokens with any catalog skill's `keywords` array. | Run `list_skills.py` to see what keywords are registered, and rephrase your query to include one of them. |
 | `403 PERMISSION_DENIED` from API hub | Your ADC user lacks `apihub.specs.get` (or related) on the project. | Add your account to the API hub project IAM. |
 | `403 PERMISSION_DENIED` from GCS | Your ADC user lacks `storage.objects.get` on the bundle bucket. | Add `roles/storage.objectViewer` on the bucket. |

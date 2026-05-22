@@ -53,17 +53,17 @@ set -u
 # the bundle as an asset. Defaults to a fixed value so a typical
 # `curl | bash` works without flags. Override with --release for
 # pinning or testing.
-DEFAULT_RELEASE_TAG="v0.1.3"
+DEFAULT_RELEASE_TAG="v0.1.4"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
 # Bundle filename inside the GitHub Release assets.
-BUNDLE_FILENAME="skill-finder-0.1.3.skill"
+BUNDLE_FILENAME="skill-finder-0.1.4.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-finder-0.1.0.skill
 # A mismatch here means the bundle hosted on GitHub does not
 # match what the release author signed off on.
-PINNED_BUNDLE_SHA256="8890167aee0774df21a15ee8bed663a74ea6bf04f91e0d6ffde9473fbc21e1b2"
+PINNED_BUNDLE_SHA256="58a219b1d731f4698e8a0b9782bcd7ebbf4dcab28387c8f7aea3cf58d2cbfb18"
 
 # sha256 of the trust root PEM file that ships INSIDE the
 # bundle (keys/trusted_pubkey.pem). Recompute at release time:
@@ -497,20 +497,72 @@ WRAPPER
 
   # Rewrite SKILL.md: every `python3 \${SKILL_DIR}/scripts/<x>.py`
   # invocation becomes `\${SKILL_DIR}/bin/run-with-venv.sh
-  # \${SKILL_DIR}/scripts/<x>.py`. We use a sentinel comment at
-  # the top of the rewritten file so a re-install (or future
-  # uninstaller) can recognise an already-rewritten SKILL.md
-  # and not double-rewrite it.
+  # \${SKILL_DIR}/scripts/<x>.py`. We insert a sentinel comment
+  # AFTER the closing --- of the YAML frontmatter so a re-install
+  # (or future uninstaller) can recognise an already-rewritten
+  # SKILL.md and not double-rewrite it.
+  #
+  # The sentinel MUST go after the frontmatter, not before it:
+  # Gemini CLI's skill discovery requires the opening --- to be
+  # the first line of the file. Any preamble (including HTML
+  # comments) makes Gemini CLI silently skip the skill -- the
+  # directory is "discovered" but the skill never appears in
+  # /skills list because its frontmatter never parses. This was
+  # the bug fixed in v0.1.4. See:
+  # https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md
   SKILL_MD="$TARGET_DIR/SKILL.md"
   SENTINEL="<!-- venv-wrapper-rewritten by install-skill-finder.sh -->"
   if ! grep -q "$SENTINEL" "$SKILL_MD" 2>/dev/null; then
     # Use a temporary file so the rewrite is atomic (no half-
-    # rewritten SKILL.md if sed is interrupted).
+    # rewritten SKILL.md if awk is interrupted).
     REWRITE_TMP="$SKILL_MD.rewriting.$$"
-    {
-      echo "$SENTINEL"
-      sed 's|python3 \${SKILL_DIR}/scripts/|\${SKILL_DIR}/bin/run-with-venv.sh \${SKILL_DIR}/scripts/|g' "$SKILL_MD"
-    } > "$REWRITE_TMP"
+    # awk pass: emit the opening ---, copy frontmatter lines
+    # unchanged through the closing ---, insert the sentinel,
+    # then emit the body with the python3 → wrapper substitution.
+    #
+    # State machine:
+    #   state 0 = looking for opening ---
+    #   state 1 = inside frontmatter, looking for closing ---
+    #   state 2 = body
+    awk -v sentinel="$SENTINEL" '
+      BEGIN { state = 0 }
+      state == 0 && /^---[[:space:]]*$/ {
+        print
+        state = 1
+        next
+      }
+      state == 1 && /^---[[:space:]]*$/ {
+        print
+        print sentinel
+        state = 2
+        next
+      }
+      state == 2 {
+        # Body: substitute python3 ${SKILL_DIR}/scripts/ with the
+        # wrapper invocation.
+        gsub(/python3 \$\{SKILL_DIR\}\/scripts\//,
+             "${SKILL_DIR}/bin/run-with-venv.sh ${SKILL_DIR}/scripts/")
+        print
+        next
+      }
+      # Frontmatter lines (state 1) and any pre-frontmatter lines
+      # (state 0, shouldnt happen with a well-formed SKILL.md):
+      # print unchanged.
+      { print }
+    ' "$SKILL_MD" > "$REWRITE_TMP"
+
+    # Sanity check: the rewritten file must start with --- on line
+    # 1 (Gemini CLI requirement). If awk produced something else,
+    # the source SKILL.md didnt have parseable frontmatter; abort
+    # rather than ship a broken install.
+    if [ "$(head -1 "$REWRITE_TMP")" != "---" ]; then
+      err "FATAL: rewritten SKILL.md does not start with '---' on line 1."
+      err "       Source SKILL.md may be missing valid YAML frontmatter."
+      err "       Refusing to install a SKILL.md that Gemini CLI cannot parse."
+      rm -f "$REWRITE_TMP"
+      exit 1
+    fi
+
     mv "$REWRITE_TMP" "$SKILL_MD"
     log "  rewrote $SKILL_MD to invoke scripts via the venv wrapper"
   else

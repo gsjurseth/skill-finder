@@ -45,14 +45,14 @@ set -u
 # ===============================================================
 # Release pins — UPDATE THESE WITH EVERY RELEASE
 # ===============================================================
-DEFAULT_RELEASE_TAG="v0.1.3"
+DEFAULT_RELEASE_TAG="v0.1.4"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
-BUNDLE_FILENAME="skill-publisher-0.1.3.skill"
+BUNDLE_FILENAME="skill-publisher-0.1.4.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-publisher-0.1.0.skill
-PINNED_BUNDLE_SHA256="500dd9b7095585137986a9532b639fb98414dfe91a6112360295f3f870897a32"
+PINNED_BUNDLE_SHA256="cd174417f8b47c2be724554cf318985006bc3af171f62d0fac305299bf9636c0"
 
 # Python runtime deps used by the four scripts/* modules that
 # publish.sh invokes. Same set as skill-finder; kept independent
@@ -405,14 +405,43 @@ exec bash "\$PUBLISH_SH" "\$@"
 WRAPPER
   chmod +x "$WRAPPER_PATH"
 
+  # Sentinel goes AFTER the closing --- of the YAML frontmatter.
+  # See install-skill-finder.sh for the rationale (Gemini CLI
+  # requires --- on line 1; preamble breaks discovery).
   SKILL_MD="$TARGET_DIR/SKILL.md"
   SENTINEL="<!-- venv-wrapper-rewritten by install-skill-publisher.sh -->"
   if ! grep -q "$SENTINEL" "$SKILL_MD" 2>/dev/null; then
     REWRITE_TMP="$SKILL_MD.rewriting.$$"
-    {
-      echo "$SENTINEL"
-      sed 's|bash \${SKILL_DIR}/scripts/publish\.sh|\${SKILL_DIR}/bin/run-with-venv.sh|g' "$SKILL_MD"
-    } > "$REWRITE_TMP"
+    awk -v sentinel="$SENTINEL" '
+      BEGIN { state = 0 }
+      state == 0 && /^---[[:space:]]*$/ {
+        print
+        state = 1
+        next
+      }
+      state == 1 && /^---[[:space:]]*$/ {
+        print
+        print sentinel
+        state = 2
+        next
+      }
+      state == 2 {
+        gsub(/bash \$\{SKILL_DIR\}\/scripts\/publish\.sh/,
+             "${SKILL_DIR}/bin/run-with-venv.sh")
+        print
+        next
+      }
+      { print }
+    ' "$SKILL_MD" > "$REWRITE_TMP"
+
+    if [ "$(head -1 "$REWRITE_TMP")" != "---" ]; then
+      err "FATAL: rewritten SKILL.md does not start with '---' on line 1."
+      err "       Source SKILL.md may be missing valid YAML frontmatter."
+      err "       Refusing to install a SKILL.md that Gemini CLI cannot parse."
+      rm -f "$REWRITE_TMP"
+      exit 1
+    fi
+
     mv "$REWRITE_TMP" "$SKILL_MD"
     log "  rewrote $SKILL_MD to invoke publish.sh via the venv wrapper"
   else

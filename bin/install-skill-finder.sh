@@ -63,7 +63,7 @@ BUNDLE_FILENAME="skill-finder-0.1.0.skill"
 #   sha256sum skill-finder-0.1.0.skill
 # A mismatch here means the bundle hosted on GitHub does not
 # match what the release author signed off on.
-PINNED_BUNDLE_SHA256="REPLACE_WITH_BUNDLE_SHA256_AT_RELEASE_TIME"
+PINNED_BUNDLE_SHA256="5d028ab55d3e4b3e7046355efcf25c3f1fa183feb5d85b720b3339960b0dadbd"
 
 # sha256 of the trust root PEM file that ships INSIDE the
 # bundle (keys/trusted_pubkey.pem). Recompute at release time:

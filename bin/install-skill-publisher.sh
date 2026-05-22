@@ -52,7 +52,7 @@ BUNDLE_FILENAME="skill-publisher-0.1.0.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-publisher-0.1.0.skill
-PINNED_BUNDLE_SHA256="REPLACE_WITH_BUNDLE_SHA256_AT_RELEASE_TIME"
+PINNED_BUNDLE_SHA256="67cee93c116e8eb1cc2571eabebcbbc65a9012ed414ccf483d90c9dfc2106550"
 
 # Python runtime deps used by the four scripts/* modules that
 # publish.sh invokes. Same set as skill-finder; kept independent

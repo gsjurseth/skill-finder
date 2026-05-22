@@ -1,0 +1,23 @@
+author: your-org-name
+capabilities: []
+description: Discovers and installs agentic skills from the customer API hub. Two
+  modes - SEARCH AND INSTALL one matching skill by natural-language query, verifying
+  its ed25519 signature against the embedded trust root; LIST every available skill
+  in the catalog as a markdown table, with cursor pagination, so the user can browse
+  what's offered before installing.
+gs_uri: gs://your-bucket-name/skill-finder-0.1.0.skill
+keywords:
+- skill
+- finder
+- catalog
+- discovery
+- install
+- apihub
+license: Apache-2.0
+manifest_schema_version: '1'
+name: skill-finder
+runtime_iam: []
+signature: g2ToLxiR76jAfmd+wY6D2AYRxG2Z2SObl24APexEIEKY5soHLLhhCXalTG1sG3kLWFApDHMeC5DQrcAIOg8ZDw==
+signing_key_id: sha256:1ab8ea8cacee61509fe9b3e11e228ed3330b53b3cb999a6e500ce95927e059b7
+version: 0.1.0
+zip_sha256: 4ecdda4b0c15c5ef7531ef2cd7dbdd987245ac706cf8aa4f62a077963b7c37c6

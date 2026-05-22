@@ -43,11 +43,13 @@ identically.
 ### OpenCode
 
 ```bash
-# 1. Install skill-finder. The installer creates a per-user venv
-#    at ~/.local/share/skill-finder/venv with the 4 runtime deps
-#    and rewrites the installed SKILL.md to invoke scripts via a
-#    wrapper that activates the venv. See "Python environment"
-#    below for details.
+# 1. Install both skill-finder AND skill-publisher in one shot.
+#    The installer creates a per-user venv at
+#    ~/.local/share/skill-finder/venv with the 4 runtime deps,
+#    rewrites each installed SKILL.md to invoke scripts via a
+#    wrapper that activates the venv, and lands both skills in
+#    ~/.config/opencode/skills/. Add --skip-publisher if you only
+#    want the discovery client.
 curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
   | bash -s -- --runtime opencode
 
@@ -66,8 +68,9 @@ export APIHUB_LOCATION=<your-apihub-region>     # e.g. us-west1
   --location "$APIHUB_LOCATION"
 
 # 5. In an OpenCode session, ask in natural language:
-#      "What skills are available in API hub?"
-#      "Find a skill that does X"
+#      "What skills are available in API hub?"     (skill-finder)
+#      "Find a skill that does X"                   (skill-finder)
+#      "Publish my skill to API hub"                (skill-publisher)
 #
 # After the first auto-install, type /reload-skills to refresh
 # the agent's skill list.
@@ -130,13 +133,17 @@ export APIHUB_LOCATION=<your-apihub-region>
 
 If you can't (or don't want to) use `gemini skills install`, our
 installer also works for Gemini CLI — just pass `--runtime gemini`
-and it installs to `~/.gemini/skills/` (Gemini CLI's canonical
-user-skills tier per the docs).
+and it installs **both skills** to `~/.gemini/skills/` (Gemini
+CLI's canonical user-skills tier per the docs) in one shot.
 
 ```bash
-# Alternative: use our installer (handles venv setup automatically).
+# Alternative: use our installer (handles venv setup automatically,
+# installs both skills, configures the per-user venv at
+# ~/.local/share/skill-finder/venv).
 curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
   | bash -s -- --runtime gemini
+
+# Add --skip-publisher if you only want the discovery client.
 
 # Sanity check via the wrapper.
 ~/.gemini/skills/skill-finder/bin/run-with-venv.sh \
@@ -162,7 +169,8 @@ singular `.agent/skills` does NOT work — empirically verified
 against Gemini CLI 0.43.0.
 
 ```bash
-# 1. Install (global scope).
+# 1. Install both skill-finder + skill-publisher (global scope).
+#    Add --skip-publisher if you only want the discovery client.
 curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
   | bash -s -- --runtime antigravity
 
@@ -347,16 +355,24 @@ release time, under human review.
 
 ## Installer flags
 
-Both installers accept the same flags.
+`install-skill-finder.sh` installs both skill-finder and
+skill-publisher by default. `install-skill-publisher.sh` is also
+shipped (installs only skill-publisher) but is mostly redundant
+now — recommended only for users who already have skill-finder
+installed from another source and just need to add the publisher.
+
+Both installers accept the same flags except `--skip-publisher`,
+which only applies to `install-skill-finder.sh`.
 
 | Flag | Default | Purpose |
 |:---|:---|:---|
 | `--runtime <name>` | auto-detected | Which agent runtime to install into. One of `opencode`, `gemini`, `antigravity`. Detection picks the first runtime whose default skills dir exists. |
 | `--install-root <dir>` | (per-runtime default; see below) | Override the skills directory location. |
-| `--release <tag>` | `v0.1.0` | Git tag of the GitHub Release to download the bundle from. Pin this in CI / scripts. |
+| `--release <tag>` | `v0.1.7` | Git tag of the GitHub Release to download the bundle from. Pin this in CI / scripts. |
 | `--repo <owner/repo>` | `gsjurseth/skill-finder` | Override the source repo (useful for forks). |
-| `--venv-dir <dir>` | `~/.local/share/skill-finder/venv` | Where to create the per-user venv that holds the Python runtime deps. Shared by skill-finder and skill-publisher when both are installed. |
+| `--venv-dir <dir>` | `~/.local/share/skill-finder/venv` | Where to create the per-user venv that holds the Python runtime deps. Shared between skill-finder and skill-publisher. |
 | `--use-uv` | off | Use [uv](https://github.com/astral-sh/uv) to create the venv and install deps instead of the stdlib `venv` module. Requires `uv` on `PATH`. Faster (~10x) but adds an external dependency. |
+| `--skip-publisher` | off | `install-skill-finder.sh` only. Installs just skill-finder; skip the bundled skill-publisher install. |
 | `--force` | off | Overwrite an existing install in the target directory. |
 | `--dry-run` | off | Print what would happen without downloading, hashing, or installing. |
 
@@ -453,8 +469,12 @@ in `~/.bashrc` / `~/.zshrc` so they survive shell restarts.
 ```
 skill-finder/
 ├── bin/                             # cold-start installer scripts
-│   ├── install-skill-finder.sh      # 2 hash pins: bundle + trust root
-│   └── install-skill-publisher.sh   # 1 hash pin: bundle
+│   ├── install-skill-finder.sh      # installs BOTH skills by default;
+│   │                                # 3 hash pins (finder bundle, publisher
+│   │                                # bundle, trust root). --skip-publisher
+│   │                                # opts out of the second skill.
+│   └── install-skill-publisher.sh   # standalone publisher-only installer;
+│                                    # 1 hash pin (publisher bundle).
 ├── skills/
 │   ├── skill-finder/                # discovery + install client (source)
 │   │   ├── SKILL.md

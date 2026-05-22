@@ -21,6 +21,7 @@
 #                           [--repo <owner/repo>]
 #                           [--venv-dir <dir>]
 #                           [--use-uv]
+#                           [--skip-publisher]
 #                           [--force]
 #                           [--dry-run]
 #
@@ -28,12 +29,17 @@
 # shasum -a 256 on macOS), unzip, python3 >= 3.10, the `venv`
 # stdlib module (or `uv` on PATH if --use-uv is passed).
 #
+# Default behavior: installs BOTH skill-finder (catalog discovery
+# client) AND skill-publisher (author-side publishing tool). Pass
+# --skip-publisher if you only want the discovery client.
+#
 # Python dependencies are installed into a per-user venv at
 # ~/.local/share/skill-finder/venv (override with --venv-dir).
 # This is necessary on distros that enforce PEP 668 (Debian 12+,
 # Ubuntu 23.04+, recent macOS Homebrew) where system `pip install`
 # is refused. The venv is also the safer default everywhere else:
 # it isolates the skill's deps from your other Python projects.
+# The same venv is shared between skill-finder and skill-publisher.
 #
 # Exit codes:
 #   0  install OK
@@ -53,24 +59,39 @@ set -u
 # the bundle as an asset. Defaults to a fixed value so a typical
 # `curl | bash` works without flags. Override with --release for
 # pinning or testing.
-DEFAULT_RELEASE_TAG="v0.1.6"
+DEFAULT_RELEASE_TAG="v0.1.7"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
-# Bundle filename inside the GitHub Release assets.
-BUNDLE_FILENAME="skill-finder-0.1.6.skill"
+# Bundle filename for skill-finder inside the GitHub Release assets.
+BUNDLE_FILENAME="skill-finder-0.1.7.skill"
 
-# sha256 of the .skill zip itself. Recompute at release time:
-#   sha256sum skill-finder-0.1.0.skill
+# Bundle filename for skill-publisher (installed alongside
+# skill-finder by default; opt out with --skip-publisher).
+PUBLISHER_BUNDLE_FILENAME="skill-publisher-0.1.7.skill"
+
+# sha256 of the skill-finder .skill zip. Recompute at release time:
+#   sha256sum skill-finder-<version>.skill
 # A mismatch here means the bundle hosted on GitHub does not
 # match what the release author signed off on.
-PINNED_BUNDLE_SHA256="88bfa4715b8b7a96b24292e391a25887a3fe1fb159c50fe83ada458e63486161"
+PINNED_BUNDLE_SHA256="b5f59bbcc280dc564f0566f17be948d27dc31a574064e3dd5257aba379afa226"
+
+# sha256 of the skill-publisher .skill zip. Same provenance rules
+# as the finder pin above. A mismatch fails the publisher install
+# without affecting the finder install (which would already have
+# completed by the time we get to the publisher step).
+PINNED_PUBLISHER_BUNDLE_SHA256="ec1b2cb6ce130c33a3c8ee011b77e901a0a30151f9f43d2a0f3a4292310a9ceb"
 
 # sha256 of the trust root PEM file that ships INSIDE the
-# bundle (keys/trusted_pubkey.pem). Recompute at release time:
-#   unzip -p skill-finder-0.1.0.skill skill-finder/keys/trusted_pubkey.pem | sha256sum
+# skill-finder bundle (keys/trusted_pubkey.pem). Recompute at
+# release time:
+#   unzip -p skill-finder-<version>.skill \
+#     skill-finder/keys/trusted_pubkey.pem | sha256sum
 # A mismatch here means whoever packed the bundle inserted a
 # different public key — every signature check after install
 # would silently trust a key the release author never approved.
+# The skill-publisher bundle does NOT contain a trust root (it
+# doesn't verify signatures itself), so there's no equivalent
+# pin for it.
 PINNED_TRUST_ROOT_SHA256="f5a74c687648ade0009846b8200eb04d035436bc229519f0f625be39b82f0684"
 
 # Informational only — printed during install so the operator
@@ -94,17 +115,19 @@ FORCE=0
 DRY_RUN=0
 USE_UV=0
 VENV_DIR=""
+SKIP_PUBLISHER=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --runtime)      RUNTIME="$2"; shift 2 ;;
-    --install-root) INSTALL_ROOT="$2"; shift 2 ;;
-    --release)      RELEASE_TAG="$2"; shift 2 ;;
-    --repo)         REPO="$2"; shift 2 ;;
-    --venv-dir)     VENV_DIR="$2"; shift 2 ;;
-    --use-uv)       USE_UV=1; shift ;;
-    --force)        FORCE=1; shift ;;
-    --dry-run)      DRY_RUN=1; shift ;;
+    --runtime)        RUNTIME="$2"; shift 2 ;;
+    --install-root)   INSTALL_ROOT="$2"; shift 2 ;;
+    --release)        RELEASE_TAG="$2"; shift 2 ;;
+    --repo)           REPO="$2"; shift 2 ;;
+    --venv-dir)       VENV_DIR="$2"; shift 2 ;;
+    --use-uv)         USE_UV=1; shift ;;
+    --skip-publisher) SKIP_PUBLISHER=1; shift ;;
+    --force)          FORCE=1; shift ;;
+    --dry-run)        DRY_RUN=1; shift ;;
     -h|--help)
       sed -n '1,30p' "$0"
       exit 0
@@ -188,6 +211,11 @@ if [ "$USE_UV" -eq 1 ]; then
   log "venv tool:    uv (forced via --use-uv)"
 else
   log "venv tool:    python3 -m venv (stdlib)"
+fi
+if [ "$SKIP_PUBLISHER" -eq 1 ]; then
+  log "skills:       skill-finder only (--skip-publisher set)"
+else
+  log "skills:       skill-finder + skill-publisher (default)"
 fi
 
 # ===============================================================
@@ -334,197 +362,239 @@ else
 fi
 
 # ===============================================================
-# Step 4: download the bundle from GitHub Releases
+# Shared install function. Called once for skill-finder, and once
+# more for skill-publisher unless --skip-publisher was passed.
+#
+# Arguments:
+#   $1  skill_name           e.g. skill-finder
+#   $2  bundle_filename      e.g. skill-finder-0.1.6.skill
+#   $3  pinned_bundle_sha    sha256 of the bundle
+#   $4  verify_trust_root    1 = verify pin #2 (finder), 0 = skip (publisher)
+#   $5  rewrite_mode         python | publish
+#                              python  = rewrites python3 ${SKILL_DIR}/scripts/X
+#                                        → wrapper invocation (skill-finder)
+#                              publish = rewrites bash ${SKILL_DIR}/scripts/publish.sh
+#                                        → wrapper invocation (skill-publisher)
+#   $6  wrapper_mode         direct | publish-sh
+#                              direct     = wrapper execs venv python directly
+#                                           with the script as $@ (skill-finder)
+#                              publish-sh = wrapper exports $PYTHON and execs
+#                                           bash publish.sh "$@" (skill-publisher)
+#
+# Globals it reads:
+#   TMPDIR, REPO, RELEASE_TAG, SHA256_CMD, DRY_RUN, FORCE,
+#   PINNED_TRUST_ROOT_SHA256, TRUST_ROOT_ED25519_FINGERPRINT,
+#   INSTALL_ROOT, VENV_DIR, log, err
+#
+# Side effects on success:
+#   Sets $TARGET_DIR and $WRAPPER_PATH to the installed paths so
+#   the caller can reference them in the trailer.
 # ===============================================================
-ASSET_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${BUNDLE_FILENAME}"
-TMPDIR="$(mktemp -d -t skill-finder-install.XXXXXX)"
-trap 'rm -rf "$TMPDIR"' EXIT
-BUNDLE_PATH="$TMPDIR/$BUNDLE_FILENAME"
+install_one_skill() {
+  local skill_name="$1"
+  local bundle_filename="$2"
+  local pinned_bundle_sha="$3"
+  local verify_trust_root="$4"
+  local rewrite_mode="$5"
+  local wrapper_mode="$6"
 
-log "downloading: $ASSET_URL"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping download"
-else
-  # -fSL: fail on 4xx/5xx, show errors, follow redirects (GitHub
-  # serves release assets via a redirect chain to objects.githubusercontent.com).
-  if ! curl -fSL --max-time 60 -o "$BUNDLE_PATH" "$ASSET_URL"; then
-    err "FATAL: download failed. Check the release tag exists at:"
-    err "       https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
-    exit 2
+  # ----- 4. Download -------------------------------------------
+  local asset_url="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${bundle_filename}"
+  local bundle_path="$TMPDIR/$bundle_filename"
+
+  log "[$skill_name] downloading: $asset_url"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[$skill_name] DRY RUN: skipping download"
+  else
+    if ! curl -fSL --max-time 60 -o "$bundle_path" "$asset_url"; then
+      err "[$skill_name] FATAL: download failed. Check the release tag exists at:"
+      err "                https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
+      exit 2
+    fi
   fi
-fi
 
-# ===============================================================
-# Step 5: verify bundle sha256 (pin #1)
-# ===============================================================
-log "verifying bundle integrity (pin #1: bundle sha256)"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping bundle hash check"
-elif [ "$PINNED_BUNDLE_SHA256" = "REPLACE_WITH_BUNDLE_SHA256_AT_RELEASE_TIME" ]; then
-  err "FATAL: PINNED_BUNDLE_SHA256 is still the placeholder."
-  err "       This script has not been finalised for a real release."
-  err "       Refusing to install an unverified bundle. Exit 3."
-  exit 3
-else
-  ACTUAL_BUNDLE_SHA="$($SHA256_CMD "$BUNDLE_PATH" | awk '{print $1}')"
-  if [ "$ACTUAL_BUNDLE_SHA" != "$PINNED_BUNDLE_SHA256" ]; then
-    err "FATAL: bundle sha256 mismatch."
-    err "  expected: $PINNED_BUNDLE_SHA256"
-    err "  actual:   $ACTUAL_BUNDLE_SHA"
-    err "  This either means the release asset was tampered with"
-    err "  in transit, OR you are running an out-of-date installer"
-    err "  script against a newer release. Refusing to install."
+  # ----- 5. Verify bundle sha256 (pin #1 for this skill) -------
+  log "[$skill_name] verifying bundle integrity"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[$skill_name] DRY RUN: skipping bundle hash check"
+  elif [ "$pinned_bundle_sha" = "REPLACE_WITH_BUNDLE_SHA256_AT_RELEASE_TIME" ]; then
+    err "[$skill_name] FATAL: bundle sha256 pin is still the placeholder."
+    err "                This script has not been finalised for a real release."
+    err "                Refusing to install an unverified bundle. Exit 3."
     exit 3
+  else
+    local actual_bundle_sha
+    actual_bundle_sha="$($SHA256_CMD "$bundle_path" | awk '{print $1}')"
+    if [ "$actual_bundle_sha" != "$pinned_bundle_sha" ]; then
+      err "[$skill_name] FATAL: bundle sha256 mismatch."
+      err "                expected: $pinned_bundle_sha"
+      err "                actual:   $actual_bundle_sha"
+      err "                Refusing to install."
+      exit 3
+    fi
+    log "[$skill_name]   OK: bundle sha256 matches pin"
   fi
-  log "  OK: bundle sha256 matches pin"
-fi
 
-# ===============================================================
-# Step 6: extract bundle to staging dir, verify trust root (pin #2)
-# ===============================================================
-STAGING="$TMPDIR/staging"
-mkdir -p "$STAGING"
-log "extracting bundle to staging dir"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping extract"
-else
-  if ! unzip -q "$BUNDLE_PATH" -d "$STAGING"; then
-    err "FATAL: unzip failed on $BUNDLE_PATH"
+  # ----- 6. Extract + (optionally) verify trust root pin -------
+  local staging="$TMPDIR/staging-$skill_name"
+  mkdir -p "$staging"
+  log "[$skill_name] extracting bundle to staging dir"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[$skill_name] DRY RUN: skipping extract"
+  else
+    if ! unzip -q "$bundle_path" -d "$staging"; then
+      err "[$skill_name] FATAL: unzip failed on $bundle_path"
+      exit 1
+    fi
+  fi
+
+  local staged_skill_dir="$staging/$skill_name"
+  if [ "$DRY_RUN" -eq 0 ] && [ ! -d "$staged_skill_dir" ]; then
+    err "[$skill_name] FATAL: bundle did not contain expected dir: $skill_name/"
     exit 1
   fi
-fi
 
-STAGED_SKILL_DIR="$STAGING/skill-finder"
-if [ "$DRY_RUN" -eq 0 ] && [ ! -d "$STAGED_SKILL_DIR" ]; then
-  err "FATAL: bundle did not contain expected dir: skill-finder/"
-  exit 1
-fi
-
-TRUST_ROOT_PATH="$STAGED_SKILL_DIR/keys/trusted_pubkey.pem"
-log "verifying trust root (pin #2: trusted_pubkey.pem sha256)"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping trust root check"
-else
-  if [ ! -f "$TRUST_ROOT_PATH" ]; then
-    err "FATAL: trust root not found in bundle: $TRUST_ROOT_PATH"
-    err "       Every subsequent install would have nothing to verify"
-    err "       signatures against. Refusing to install."
-    exit 3
+  if [ "$verify_trust_root" -eq 1 ]; then
+    local trust_root_path="$staged_skill_dir/keys/trusted_pubkey.pem"
+    log "[$skill_name] verifying trust root (pin #2: trusted_pubkey.pem sha256)"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "[$skill_name] DRY RUN: skipping trust root check"
+    else
+      if [ ! -f "$trust_root_path" ]; then
+        err "[$skill_name] FATAL: trust root not found in bundle: $trust_root_path"
+        err "                Refusing to install."
+        exit 3
+      fi
+      local actual_trust_sha
+      actual_trust_sha="$($SHA256_CMD "$trust_root_path" | awk '{print $1}')"
+      if [ "$actual_trust_sha" != "$PINNED_TRUST_ROOT_SHA256" ]; then
+        err "[$skill_name] FATAL: trust root sha256 mismatch."
+        err "                expected: $PINNED_TRUST_ROOT_SHA256"
+        err "                actual:   $actual_trust_sha"
+        err "                Refusing to proceed."
+        exit 3
+      fi
+      log "[$skill_name]   OK: trust root sha256 matches pin"
+      log "[$skill_name]   ed25519 fingerprint: $TRUST_ROOT_ED25519_FINGERPRINT"
+    fi
   fi
-  ACTUAL_TRUST_SHA="$($SHA256_CMD "$TRUST_ROOT_PATH" | awk '{print $1}')"
-  if [ "$ACTUAL_TRUST_SHA" != "$PINNED_TRUST_ROOT_SHA256" ]; then
-    err "FATAL: trust root sha256 mismatch."
-    err "  expected: $PINNED_TRUST_ROOT_SHA256"
-    err "  actual:   $ACTUAL_TRUST_SHA"
-    err "  The bundle's embedded trust root does NOT match what this"
-    err "  installer was built to trust. This is the most security-"
-    err "  sensitive check in the install. Refusing to proceed."
-    exit 3
-  fi
-  log "  OK: trust root sha256 matches pin"
-  log "  ed25519 fingerprint: $TRUST_ROOT_ED25519_FINGERPRINT"
-fi
 
-# ===============================================================
-# Step 7: atomic install
-# ===============================================================
-TARGET_DIR="$INSTALL_ROOT/skill-finder"
-if [ -d "$TARGET_DIR" ] && [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-  err "FATAL: $TARGET_DIR already exists. Re-run with --force to overwrite."
-  exit 4
-fi
-
-log "installing to: $TARGET_DIR"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping install"
-else
-  if ! mkdir -p "$INSTALL_ROOT"; then
-    err "FATAL: cannot create install root: $INSTALL_ROOT"
+  # ----- 7. Atomic install -------------------------------------
+  TARGET_DIR="$INSTALL_ROOT/$skill_name"
+  if [ -d "$TARGET_DIR" ] && [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    err "[$skill_name] FATAL: $TARGET_DIR already exists. Re-run with --force to overwrite."
     exit 4
   fi
-  # Atomic: write to a sibling dir, then rename. Avoids leaving a
-  # half-installed skill if the copy is interrupted.
-  STAGED_TARGET="$INSTALL_ROOT/.skill-finder.staging.$$"
-  rm -rf "$STAGED_TARGET"
-  if ! cp -a "$STAGED_SKILL_DIR" "$STAGED_TARGET"; then
-    err "FATAL: copy to staging failed: $STAGED_TARGET"
-    rm -rf "$STAGED_TARGET"
-    exit 4
-  fi
-  rm -rf "$TARGET_DIR"
-  if ! mv "$STAGED_TARGET" "$TARGET_DIR"; then
-    err "FATAL: atomic rename failed"
-    rm -rf "$STAGED_TARGET"
-    exit 4
-  fi
-fi
 
-# ===============================================================
-# Step 8: install the venv wrapper and rewrite SKILL.md to use it
-# ===============================================================
-# The bundled SKILL.md tells the agent to invoke the scripts via
-# `python3 ${SKILL_DIR}/scripts/find_install.py …`. That uses
-# python3 from PATH, which on a PEP 668 distro cannot import
-# cryptography / requests / google-auth etc. — exactly the reason
-# we created the venv above. We substitute every literal `python3`
-# with a path to a small wrapper that activates the venv before
-# invoking the real Python. SKILL.md is the only file we modify
-# post-install; the Python sources are byte-identical to the
-# bundle.
-log "installing venv wrapper and rewriting SKILL.md to use it"
-WRAPPER_PATH="$TARGET_DIR/bin/run-with-venv.sh"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping wrapper install and SKILL.md rewrite"
-else
+  log "[$skill_name] installing to: $TARGET_DIR"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[$skill_name] DRY RUN: skipping install"
+  else
+    if ! mkdir -p "$INSTALL_ROOT"; then
+      err "[$skill_name] FATAL: cannot create install root: $INSTALL_ROOT"
+      exit 4
+    fi
+    local staged_target="$INSTALL_ROOT/.${skill_name}.staging.$$"
+    rm -rf "$staged_target"
+    if ! cp -a "$staged_skill_dir" "$staged_target"; then
+      err "[$skill_name] FATAL: copy to staging failed: $staged_target"
+      rm -rf "$staged_target"
+      exit 4
+    fi
+    rm -rf "$TARGET_DIR"
+    if ! mv "$staged_target" "$TARGET_DIR"; then
+      err "[$skill_name] FATAL: atomic rename failed"
+      rm -rf "$staged_target"
+      exit 4
+    fi
+  fi
+
+  # ----- 8. Wrapper + SKILL.md rewrite -------------------------
+  WRAPPER_PATH="$TARGET_DIR/bin/run-with-venv.sh"
+  log "[$skill_name] installing venv wrapper and rewriting SKILL.md"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[$skill_name] DRY RUN: skipping wrapper install and SKILL.md rewrite"
+    return 0
+  fi
+
   mkdir -p "$TARGET_DIR/bin"
-  cat > "$WRAPPER_PATH" <<WRAPPER
+
+  # Wrapper body depends on mode. Both forms check that the venv
+  # Python exists and emit an actionable error if not.
+  case "$wrapper_mode" in
+    direct)
+      cat > "$WRAPPER_PATH" <<WRAPPER
 #!/usr/bin/env bash
 # Auto-generated by install-skill-finder.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ).
-# Runs the skill-finder scripts with the per-user venv's Python
+# Runs the $skill_name scripts with the per-user venv's Python
 # so that imports of cryptography / google-auth / requests /
 # pyyaml resolve correctly on PEP 668 distros.
 # If you move or delete \$VENV_DIR, regenerate this file by
 # re-running install-skill-finder.sh.
 VENV_PYTHON="$VENV_DIR/bin/python"
 if [ ! -x "\$VENV_PYTHON" ]; then
-  echo "[skill-finder] FATAL: venv Python missing: \$VENV_PYTHON" >&2
-  echo "[skill-finder] Re-run install-skill-finder.sh to rebuild the venv." >&2
+  echo "[$skill_name] FATAL: venv Python missing: \$VENV_PYTHON" >&2
+  echo "[$skill_name] Re-run install-skill-finder.sh to rebuild the venv." >&2
   exit 1
 fi
 exec "\$VENV_PYTHON" "\$@"
 WRAPPER
+      ;;
+    publish-sh)
+      cat > "$WRAPPER_PATH" <<WRAPPER
+#!/usr/bin/env bash
+# Auto-generated by install-skill-finder.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+# Wraps publish.sh to use the per-user venv's Python so that
+# imports of cryptography / google-auth / requests / pyyaml
+# resolve correctly on PEP 668 distros.
+VENV_PYTHON="$VENV_DIR/bin/python"
+if [ ! -x "\$VENV_PYTHON" ]; then
+  echo "[$skill_name] FATAL: venv Python missing: \$VENV_PYTHON" >&2
+  echo "[$skill_name] Re-run install-skill-finder.sh to rebuild the venv." >&2
+  exit 1
+fi
+export PYTHON="\$VENV_PYTHON"
+PUBLISH_SH="\$(dirname "\$0")/../scripts/publish.sh"
+exec bash "\$PUBLISH_SH" "\$@"
+WRAPPER
+      ;;
+    *)
+      err "[$skill_name] INTERNAL ERROR: unknown wrapper_mode=$wrapper_mode"
+      exit 1
+      ;;
+  esac
   chmod +x "$WRAPPER_PATH"
 
-  # Rewrite SKILL.md: every `python3 \${SKILL_DIR}/scripts/<x>.py`
-  # invocation becomes `\${SKILL_DIR}/bin/run-with-venv.sh
-  # \${SKILL_DIR}/scripts/<x>.py`. We insert a sentinel comment
-  # AFTER the closing --- of the YAML frontmatter so a re-install
-  # (or future uninstaller) can recognise an already-rewritten
-  # SKILL.md and not double-rewrite it.
-  #
-  # The sentinel MUST go after the frontmatter, not before it:
-  # Gemini CLI's skill discovery requires the opening --- to be
-  # the first line of the file. Any preamble (including HTML
-  # comments) makes Gemini CLI silently skip the skill -- the
-  # directory is "discovered" but the skill never appears in
-  # /skills list because its frontmatter never parses. This was
-  # the bug fixed in v0.1.4. See:
-  # https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md
-  SKILL_MD="$TARGET_DIR/SKILL.md"
-  SENTINEL="<!-- venv-wrapper-rewritten by install-skill-finder.sh -->"
-  if ! grep -q "$SENTINEL" "$SKILL_MD" 2>/dev/null; then
-    # Use a temporary file so the rewrite is atomic (no half-
-    # rewritten SKILL.md if awk is interrupted).
-    REWRITE_TMP="$SKILL_MD.rewriting.$$"
-    # awk pass: emit the opening ---, copy frontmatter lines
-    # unchanged through the closing ---, insert the sentinel,
-    # then emit the body with the python3 → wrapper substitution.
-    #
-    # State machine:
-    #   state 0 = looking for opening ---
-    #   state 1 = inside frontmatter, looking for closing ---
-    #   state 2 = body
-    awk -v sentinel="$SENTINEL" '
+  # SKILL.md rewrite. The sentinel MUST go AFTER the closing
+  # --- of the YAML frontmatter so Gemini CLI's discovery
+  # (which requires --- on line 1) still works. See v0.1.4
+  # release notes for the bug this fixed.
+  local skill_md="$TARGET_DIR/SKILL.md"
+  local sentinel="<!-- venv-wrapper-rewritten by install-skill-finder.sh -->"
+  if ! grep -q "$sentinel" "$skill_md" 2>/dev/null; then
+    local rewrite_tmp="$skill_md.rewriting.$$"
+
+    # The rewrite pattern depends on rewrite_mode. We pre-compute
+    # the awk substitution patterns and pass them in via -v.
+    local pattern_from pattern_to
+    case "$rewrite_mode" in
+      python)
+        pattern_from='python3 \\$\\{SKILL_DIR\\}/scripts/'
+        pattern_to='${SKILL_DIR}/bin/run-with-venv.sh ${SKILL_DIR}/scripts/'
+        ;;
+      publish)
+        pattern_from='bash \\$\\{SKILL_DIR\\}/scripts/publish\\.sh'
+        pattern_to='${SKILL_DIR}/bin/run-with-venv.sh'
+        ;;
+      *)
+        err "[$skill_name] INTERNAL ERROR: unknown rewrite_mode=$rewrite_mode"
+        exit 1
+        ;;
+    esac
+
+    awk -v sentinel="$sentinel" \
+        -v pat_from="$pattern_from" \
+        -v pat_to="$pattern_to" '
       BEGIN { state = 0 }
       state == 0 && /^---[[:space:]]*$/ {
         print
@@ -538,42 +608,75 @@ WRAPPER
         next
       }
       state == 2 {
-        # Body: substitute python3 ${SKILL_DIR}/scripts/ with the
-        # wrapper invocation.
-        gsub(/python3 \$\{SKILL_DIR\}\/scripts\//,
-             "${SKILL_DIR}/bin/run-with-venv.sh ${SKILL_DIR}/scripts/")
+        gsub(pat_from, pat_to)
         print
         next
       }
-      # Frontmatter lines (state 1) and any pre-frontmatter lines
-      # (state 0, shouldnt happen with a well-formed SKILL.md):
-      # print unchanged.
       { print }
-    ' "$SKILL_MD" > "$REWRITE_TMP"
+    ' "$skill_md" > "$rewrite_tmp"
 
-    # Sanity check: the rewritten file must start with --- on line
-    # 1 (Gemini CLI requirement). If awk produced something else,
-    # the source SKILL.md didnt have parseable frontmatter; abort
-    # rather than ship a broken install.
-    if [ "$(head -1 "$REWRITE_TMP")" != "---" ]; then
-      err "FATAL: rewritten SKILL.md does not start with '---' on line 1."
-      err "       Source SKILL.md may be missing valid YAML frontmatter."
-      err "       Refusing to install a SKILL.md that Gemini CLI cannot parse."
-      rm -f "$REWRITE_TMP"
+    if [ "$(head -1 "$rewrite_tmp")" != "---" ]; then
+      err "[$skill_name] FATAL: rewritten SKILL.md does not start with '---' on line 1."
+      err "                Source SKILL.md may be missing valid YAML frontmatter."
+      err "                Refusing to install a SKILL.md that Gemini CLI cannot parse."
+      rm -f "$rewrite_tmp"
       exit 1
     fi
 
-    mv "$REWRITE_TMP" "$SKILL_MD"
-    log "  rewrote $SKILL_MD to invoke scripts via the venv wrapper"
+    mv "$rewrite_tmp" "$skill_md"
+    log "[$skill_name]   rewrote $skill_md to invoke scripts via the venv wrapper"
   else
-    log "  SKILL.md already rewritten (sentinel present); skipping"
+    log "[$skill_name]   SKILL.md already rewritten (sentinel present); skipping"
   fi
+}
+
+# Create the tmp dir + trap once, BEFORE calling install_one_skill
+# (which expects $TMPDIR to be set).
+TMPDIR="$(mktemp -d -t skill-finder-install.XXXXXX)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+# ===============================================================
+# Install skill-finder
+# ===============================================================
+install_one_skill \
+  skill-finder \
+  "$BUNDLE_FILENAME" \
+  "$PINNED_BUNDLE_SHA256" \
+  1 \
+  python \
+  direct
+
+# Stash the finder install paths for the trailer.
+FINDER_TARGET_DIR="$TARGET_DIR"
+FINDER_WRAPPER_PATH="$WRAPPER_PATH"
+
+# ===============================================================
+# Install skill-publisher (unless --skip-publisher)
+# ===============================================================
+PUBLISHER_TARGET_DIR=""
+PUBLISHER_WRAPPER_PATH=""
+if [ "$SKIP_PUBLISHER" -eq 0 ]; then
+  install_one_skill \
+    skill-publisher \
+    "$PUBLISHER_BUNDLE_FILENAME" \
+    "$PINNED_PUBLISHER_BUNDLE_SHA256" \
+    0 \
+    publish \
+    publish-sh
+  PUBLISHER_TARGET_DIR="$TARGET_DIR"
+  PUBLISHER_WRAPPER_PATH="$WRAPPER_PATH"
+else
+  log "[skill-publisher] skipped (--skip-publisher set)"
 fi
 
 # ===============================================================
-# Step 9: trailer with next-steps
+# Trailer with next-steps
 # ===============================================================
-log "skill-finder $RELEASE_TAG installed successfully"
+if [ "$SKIP_PUBLISHER" -eq 0 ]; then
+  log "skill-finder + skill-publisher $RELEASE_TAG installed successfully"
+else
+  log "skill-finder $RELEASE_TAG installed successfully (skill-publisher skipped)"
+fi
 log ""
 log "Next steps:"
 log "  1. Authenticate with Google Cloud:"
@@ -582,13 +685,16 @@ log "  2. Export your catalog coordinates:"
 log "       export APIHUB_PROJECT=<your-gcp-project-id>"
 log "       export APIHUB_LOCATION=<your-apihub-region>"
 log "  3. Sanity check by listing the catalog (uses the venv):"
-log "       $WRAPPER_PATH \\"
-log "         $TARGET_DIR/scripts/list_skills.py \\"
+log "       $FINDER_WRAPPER_PATH \\"
+log "         $FINDER_TARGET_DIR/scripts/list_skills.py \\"
 log "         --project \"\$APIHUB_PROJECT\" \\"
 log "         --location \"\$APIHUB_LOCATION\""
 log "  4. In your agent CLI, ask in natural language:"
 log "       \"What skills are available in API hub?\""
 log "       \"Find a skill that does X\""
+if [ "$SKIP_PUBLISHER" -eq 0 ]; then
+log "       \"Publish my skill to API hub\""
+fi
 log ""
 case "$RUNTIME" in
   opencode)

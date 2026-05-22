@@ -5,7 +5,7 @@ description: Discovers and installs agentic skills from the customer API hub. Tw
   its ed25519 signature against the embedded trust root; LIST every available skill
   in the catalog as a markdown table, with cursor pagination, so the user can browse
   what's offered before installing.
-gs_uri: gs://your-bucket-name/skill-finder-0.1.6.skill
+gs_uri: gs://your-bucket-name/skill-finder-0.1.7.skill
 keywords:
 - skill
 - finder
@@ -17,7 +17,7 @@ license: Apache-2.0
 manifest_schema_version: '1'
 name: skill-finder
 runtime_iam: []
-signature: bHa2Uuabt+8zpCe3ngCLnp3AWLt5q2HyO8/A939hyaXfkrSwabmV/EQdK/NqC46jNvQf902do/LZB4xXAILyDA==
+signature: pkbiNLFfOvViGksTvs4MrOy97nrbnZfRWOz2TNyp6IY1CsJxOuHe/iQnDl2OV8j/EaF59X7UYYYAx8U9QEyxAg==
 signing_key_id: sha256:1ab8ea8cacee61509fe9b3e11e228ed3330b53b3cb999a6e500ce95927e059b7
-version: 0.1.6
-zip_sha256: f23fd95a9085d27b7f84065dd10150fb443156792684dc41ae776fceec812448
+version: 0.1.7
+zip_sha256: 0f2714c0ff8008c733cf4a322c5082c70a54ace1e0fa46bb5e0570b78dc3ab38

@@ -20,11 +20,18 @@
 #                              [--install-root <dir>]
 #                              [--release <tag>]
 #                              [--repo <owner/repo>]
+#                              [--venv-dir <dir>]
+#                              [--use-uv]
 #                              [--force]
 #                              [--dry-run]
 #
 # Required tools on PATH: bash >= 3.2, curl, sha256sum (or
-# shasum -a 256 on macOS), unzip, python3 >= 3.10, pip.
+# shasum -a 256 on macOS), unzip, python3 >= 3.10, the `venv`
+# stdlib module (or `uv` on PATH if --use-uv is passed).
+#
+# Python dependencies are installed into a per-user venv at
+# ~/.local/share/skill-finder/venv (override with --venv-dir).
+# The venv is shared with skill-finder if both are installed.
 #
 # Exit codes:
 #   0  install OK
@@ -61,6 +68,8 @@ RELEASE_TAG="$DEFAULT_RELEASE_TAG"
 REPO="$DEFAULT_REPO"
 FORCE=0
 DRY_RUN=0
+USE_UV=0
+VENV_DIR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,6 +77,8 @@ while [ $# -gt 0 ]; do
     --install-root) INSTALL_ROOT="$2"; shift 2 ;;
     --release)      RELEASE_TAG="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
+    --venv-dir)     VENV_DIR="$2"; shift 2 ;;
+    --use-uv)       USE_UV=1; shift ;;
     --force)        FORCE=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     -h|--help)
@@ -80,6 +91,10 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ -z "$VENV_DIR" ]; then
+  VENV_DIR="$HOME/.local/share/skill-finder/venv"
+fi
 
 log() { echo "[install] $*"; }
 err() { echo "[install] $*" >&2; }
@@ -122,6 +137,12 @@ log "runtime:      $RUNTIME"
 log "install root: $INSTALL_ROOT"
 log "release tag:  $RELEASE_TAG"
 log "repo:         $REPO"
+log "venv dir:     $VENV_DIR"
+if [ "$USE_UV" -eq 1 ]; then
+  log "venv tool:    uv (forced via --use-uv)"
+else
+  log "venv tool:    python3 -m venv (stdlib)"
+fi
 
 # ===============================================================
 # Step 2: tool preflight
@@ -136,7 +157,6 @@ need_tool() {
 need_tool curl
 need_tool unzip
 need_tool python3
-need_tool pip3 || need_tool pip
 
 if command -v sha256sum >/dev/null 2>&1; then
   SHA256_CMD="sha256sum"
@@ -155,16 +175,94 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }
   exit 1
 fi
 
-# ===============================================================
-# Step 3: pip-install runtime deps
-# ===============================================================
-log "installing Python runtime deps: ${PY_DEPS[*]}"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping pip install"
-else
-  if ! python3 -m pip install --user --quiet --upgrade "${PY_DEPS[@]}"; then
-    err "FATAL: pip install failed for runtime deps"
+if [ "$USE_UV" -eq 1 ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    err "FATAL: --use-uv was passed but 'uv' is not on PATH."
+    err "       Install uv first: https://github.com/astral-sh/uv"
+    err "       Or drop --use-uv to use the stdlib venv module."
     exit 1
+  fi
+else
+  # Detect both 'venv' import AND ensurepip up front. On Debian
+  # derivatives the venv stub imports fine but creation fails at
+  # runtime because ensurepip is in a separate apt package.
+  if ! python3 -c "import venv" >/dev/null 2>&1; then
+    err "FATAL: python3 stdlib 'venv' module not available."
+    err "       On Debian / Ubuntu: sudo apt install python3-venv"
+    err "       Or pass --use-uv if you have uv installed instead."
+    exit 1
+  fi
+  if ! python3 -c "import ensurepip" >/dev/null 2>&1; then
+    err "FATAL: python3 'ensurepip' module not available."
+    err "       'python3 -m venv' creates an empty venv without it."
+    err "       On Debian / Ubuntu: sudo apt install python3-venv"
+    err "         (or the version-specific package, e.g."
+    err "          python3.13-venv if python3 --version is 3.13.x)"
+    err "       On macOS Homebrew: the venv package should be"
+    err "         bundled; reinstall python with 'brew reinstall python@3.13'"
+    err "       Or pass --use-uv if you have uv installed instead."
+    exit 1
+  fi
+fi
+
+# ===============================================================
+# Step 3: create the per-user venv and install runtime deps
+# ===============================================================
+log "step 3/N: setting up Python runtime"
+log "  venv dir: $VENV_DIR"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  log "DRY RUN: skipping venv create + dep install"
+else
+  if ! mkdir -p "$(dirname "$VENV_DIR")"; then
+    err "FATAL: cannot create venv parent dir: $(dirname "$VENV_DIR")"
+    exit 4
+  fi
+
+  # Decide whether to (re)create the venv. Reuse requires BOTH
+  # bin/python AND a working pip inside it; anything else triggers
+  # a fresh create with cleanup of the broken directory.
+  VENV_OK=0
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    if "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+      VENV_OK=1
+    fi
+  fi
+  if [ "$VENV_OK" -eq 0 ]; then
+    if [ -d "$VENV_DIR" ]; then
+      log "  existing venv at $VENV_DIR is broken; removing and recreating"
+      rm -rf "$VENV_DIR"
+    else
+      log "  creating venv at $VENV_DIR"
+    fi
+    if [ "$USE_UV" -eq 1 ]; then
+      if ! uv venv --quiet "$VENV_DIR"; then
+        err "FATAL: uv venv failed"
+        exit 1
+      fi
+    else
+      if ! python3 -m venv "$VENV_DIR"; then
+        err "FATAL: python3 -m venv failed"
+        exit 1
+      fi
+    fi
+  else
+    log "  reusing existing venv (pip is healthy)"
+  fi
+
+  log "  installing deps: ${PY_DEPS[*]}"
+  if [ "$USE_UV" -eq 1 ]; then
+    if ! uv pip install --quiet --python "$VENV_DIR/bin/python" \
+         --upgrade "${PY_DEPS[@]}"; then
+      err "FATAL: uv pip install failed for runtime deps"
+      exit 1
+    fi
+  else
+    if ! "$VENV_DIR/bin/python" -m pip install --quiet --upgrade \
+         "${PY_DEPS[@]}"; then
+      err "FATAL: pip install failed for runtime deps in venv"
+      exit 1
+    fi
   fi
 fi
 
@@ -273,16 +371,69 @@ else
 fi
 
 # ===============================================================
-# Step 8: trailer with author-side next-steps
+# Step 8: install the venv wrapper and rewrite SKILL.md to use it
+# ===============================================================
+# publish.sh internally calls the four pack/sign/upload/register
+# Python modules. By default it uses `python3` from PATH which on
+# a PEP 668 distro cannot import cryptography / requests /
+# google-auth. publish.sh respects a $PYTHON env var override; we
+# write a small wrapper that exports $PYTHON to point at the venv
+# and then execs publish.sh. SKILL.md's `bash ${SKILL_DIR}/scripts/
+# publish.sh` invocation is rewritten to point at the wrapper.
+log "installing venv wrapper and rewriting SKILL.md to use it"
+WRAPPER_PATH="$TARGET_DIR/bin/run-with-venv.sh"
+if [ "$DRY_RUN" -eq 1 ]; then
+  log "DRY RUN: skipping wrapper install and SKILL.md rewrite"
+else
+  mkdir -p "$TARGET_DIR/bin"
+  cat > "$WRAPPER_PATH" <<WRAPPER
+#!/usr/bin/env bash
+# Auto-generated by install-skill-publisher.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+# Wraps publish.sh to use the per-user venv's Python so that
+# imports of cryptography / google-auth / requests / pyyaml
+# resolve correctly on PEP 668 distros.
+# If you move or delete \$VENV_DIR, regenerate this file by
+# re-running install-skill-publisher.sh.
+VENV_PYTHON="$VENV_DIR/bin/python"
+if [ ! -x "\$VENV_PYTHON" ]; then
+  echo "[skill-publisher] FATAL: venv Python missing: \$VENV_PYTHON" >&2
+  echo "[skill-publisher] Re-run install-skill-publisher.sh to rebuild the venv." >&2
+  exit 1
+fi
+export PYTHON="\$VENV_PYTHON"
+PUBLISH_SH="\$(dirname "\$0")/../scripts/publish.sh"
+exec bash "\$PUBLISH_SH" "\$@"
+WRAPPER
+  chmod +x "$WRAPPER_PATH"
+
+  SKILL_MD="$TARGET_DIR/SKILL.md"
+  SENTINEL="<!-- venv-wrapper-rewritten by install-skill-publisher.sh -->"
+  if ! grep -q "$SENTINEL" "$SKILL_MD" 2>/dev/null; then
+    REWRITE_TMP="$SKILL_MD.rewriting.$$"
+    {
+      echo "$SENTINEL"
+      sed 's|bash \${SKILL_DIR}/scripts/publish\.sh|\${SKILL_DIR}/bin/run-with-venv.sh|g' "$SKILL_MD"
+    } > "$REWRITE_TMP"
+    mv "$REWRITE_TMP" "$SKILL_MD"
+    log "  rewrote $SKILL_MD to invoke publish.sh via the venv wrapper"
+  else
+    log "  SKILL.md already rewritten (sentinel present); skipping"
+  fi
+fi
+
+# ===============================================================
+# Step 9: trailer with author-side next-steps
 # ===============================================================
 log "skill-publisher $RELEASE_TAG installed successfully"
 log ""
 log "skill-publisher is an AUTHOR-side tool. To use it you need:"
-log "  - The four scripts/* Python modules from the upstream repo"
-log "    (pack_skill, sign_skill, upload_skill, register_skill)."
-log "    Clone the source repo if you don't already have them."
+log "  - A clone of this repo somewhere (publish.sh shells out to"
+log "    scripts/pack_skill, scripts/sign_skill, scripts/upload_skill,"
+log "    and scripts/register_skill — they must be importable from"
+log "    the directory you invoke publish.sh from, OR pass"
+log "    --repo-root pointing at your clone)."
 log "  - An ed25519 signing key (32 raw bytes). Generate with:"
-log "       python3 -c \"from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; \\"
+log "       $VENV_DIR/bin/python -c \"from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; \\"
 log "         from cryptography.hazmat.primitives import serialization; \\"
 log "         k = Ed25519PrivateKey.generate(); \\"
 log "         open('signing.raw','wb').write(k.private_bytes(serialization.Encoding.Raw, \\"
@@ -291,16 +442,17 @@ log "       chmod 600 signing.raw"
 log "  - A GCS bucket for the .skill bundles"
 log "  - API hub attribute definitions (run update_taxonomy.py once)"
 log ""
-log "Then publish a skill with:"
-log "  bash $TARGET_DIR/scripts/publish.sh \\"
+log "Then publish a skill with (uses the venv via the wrapper):"
+log "  $WRAPPER_PATH \\"
 log "    --src <path-to-skill-source-dir> \\"
 log "    --bucket <your-gcs-bucket> \\"
 log "    --priv-key <path-to-signing.raw> \\"
 log "    --project <your-gcp-project-id> \\"
-log "    --location <your-apihub-region>"
+log "    --location <your-apihub-region> \\"
+log "    --repo-root <path-to-this-repo-clone>"
 log ""
-log "See the upstream repo README for the full author flow,"
-log "including how to register a NEW signing key in skill-finder's"
-log "trust root (you must rebuild skill-finder for that)."
+log "See the repo README for the full author flow, including how"
+log "to register a NEW signing key in skill-finder's trust root"
+log "(you must rebuild skill-finder for that)."
 
 exit 0

@@ -19,11 +19,21 @@
 #                           [--install-root <dir>]
 #                           [--release <tag>]
 #                           [--repo <owner/repo>]
+#                           [--venv-dir <dir>]
+#                           [--use-uv]
 #                           [--force]
 #                           [--dry-run]
 #
 # Required tools on PATH: bash >= 3.2, curl, sha256sum (or
-# shasum -a 256 on macOS), unzip, python3 >= 3.10, pip.
+# shasum -a 256 on macOS), unzip, python3 >= 3.10, the `venv`
+# stdlib module (or `uv` on PATH if --use-uv is passed).
+#
+# Python dependencies are installed into a per-user venv at
+# ~/.local/share/skill-finder/venv (override with --venv-dir).
+# This is necessary on distros that enforce PEP 668 (Debian 12+,
+# Ubuntu 23.04+, recent macOS Homebrew) where system `pip install`
+# is refused. The venv is also the safer default everywhere else:
+# it isolates the skill's deps from your other Python projects.
 #
 # Exit codes:
 #   0  install OK
@@ -82,6 +92,8 @@ RELEASE_TAG="$DEFAULT_RELEASE_TAG"
 REPO="$DEFAULT_REPO"
 FORCE=0
 DRY_RUN=0
+USE_UV=0
+VENV_DIR=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -89,6 +101,8 @@ while [ $# -gt 0 ]; do
     --install-root) INSTALL_ROOT="$2"; shift 2 ;;
     --release)      RELEASE_TAG="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
+    --venv-dir)     VENV_DIR="$2"; shift 2 ;;
+    --use-uv)       USE_UV=1; shift ;;
     --force)        FORCE=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     -h|--help)
@@ -101,6 +115,13 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# Default per-user venv location (shared by skill-finder and
+# skill-publisher so we don't create two copies of the same
+# 4-package dependency tree).
+if [ -z "$VENV_DIR" ]; then
+  VENV_DIR="$HOME/.local/share/skill-finder/venv"
+fi
 
 log() { echo "[install] $*"; }
 err() { echo "[install] $*" >&2; }
@@ -155,6 +176,12 @@ log "runtime:      $RUNTIME"
 log "install root: $INSTALL_ROOT"
 log "release tag:  $RELEASE_TAG"
 log "repo:         $REPO"
+log "venv dir:     $VENV_DIR"
+if [ "$USE_UV" -eq 1 ]; then
+  log "venv tool:    uv (forced via --use-uv)"
+else
+  log "venv tool:    python3 -m venv (stdlib)"
+fi
 
 # ===============================================================
 # Step 2: tool preflight
@@ -169,7 +196,6 @@ need_tool() {
 need_tool curl
 need_tool unzip
 need_tool python3
-need_tool pip3 || need_tool pip
 
 # sha256: GNU coreutils ships sha256sum; macOS ships shasum
 if command -v sha256sum >/dev/null 2>&1; then
@@ -181,8 +207,8 @@ else
   exit 1
 fi
 
-# Python version check. We need >= 3.10 because the upstream
-# scripts use PEP 604 union types.
+# Python version check. We need >= 3.10 because the source uses
+# PEP 604 union types.
 PY_VER="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
 PY_MAJOR="$(echo "$PY_VER" | cut -d. -f1)"
 PY_MINOR="$(echo "$PY_VER" | cut -d. -f2)"
@@ -191,16 +217,112 @@ if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }
   exit 1
 fi
 
-# ===============================================================
-# Step 3: pip-install runtime deps
-# ===============================================================
-log "installing Python runtime deps: ${PY_DEPS[*]}"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "DRY RUN: skipping pip install"
-else
-  if ! python3 -m pip install --user --quiet --upgrade "${PY_DEPS[@]}"; then
-    err "FATAL: pip install failed for runtime deps"
+# Validate --use-uv if requested.
+if [ "$USE_UV" -eq 1 ]; then
+  if ! command -v uv >/dev/null 2>&1; then
+    err "FATAL: --use-uv was passed but 'uv' is not on PATH."
+    err "       Install uv first: https://github.com/astral-sh/uv"
+    err "       Or drop --use-uv to use the stdlib venv module."
     exit 1
+  fi
+else
+  # Check that the stdlib venv module is importable AND that
+  # ensurepip is available. On Debian derivatives the venv module
+  # imports fine (it's a stub) but `python3 -m venv` fails at
+  # runtime because ensurepip is in a separate apt package
+  # (python3.NN-venv or python3-venv). Detect both up front so
+  # the user sees a single actionable error.
+  if ! python3 -c "import venv" >/dev/null 2>&1; then
+    err "FATAL: python3 stdlib 'venv' module not available."
+    err "       On Debian / Ubuntu: sudo apt install python3-venv"
+    err "       Or pass --use-uv if you have uv installed instead."
+    exit 1
+  fi
+  if ! python3 -c "import ensurepip" >/dev/null 2>&1; then
+    err "FATAL: python3 'ensurepip' module not available."
+    err "       'python3 -m venv' creates an empty venv without it."
+    err "       On Debian / Ubuntu: sudo apt install python3-venv"
+    err "         (or the version-specific package, e.g."
+    err "          python3.13-venv if python3 --version is 3.13.x)"
+    err "       On macOS Homebrew: the venv package should be"
+    err "         bundled; reinstall python with 'brew reinstall python@3.13'"
+    err "       Or pass --use-uv if you have uv installed instead."
+    exit 1
+  fi
+fi
+
+# ===============================================================
+# Step 3: create the per-user venv and install runtime deps
+# ===============================================================
+log "step 3/N: setting up Python runtime"
+log "  venv dir: $VENV_DIR"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  log "DRY RUN: skipping venv create + dep install"
+else
+  # Create the venv directory's parent if needed.
+  if ! mkdir -p "$(dirname "$VENV_DIR")"; then
+    err "FATAL: cannot create venv parent dir: $(dirname "$VENV_DIR")"
+    exit 4
+  fi
+
+  # Create the venv if it doesn't already exist. We don't blow
+  # away an existing venv — re-running the installer should be
+  # idempotent and shouldn't churn ~50MB of pip-installed bytes
+  # every time. If the user wants a fresh venv, they delete it
+  # by hand or pass a different --venv-dir.
+  # Decide whether to (re)create the venv. We do NOT blindly
+  # reuse — an existing venv may be half-built (no pip, no
+  # site-packages) from a previous failed run, and reusing it
+  # would cascade into 'No module named pip' errors. The reuse
+  # path requires BOTH bin/python AND a working pip inside the
+  # venv. Any other state triggers a fresh create (with cleanup).
+  VENV_OK=0
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    if "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+      VENV_OK=1
+    fi
+  fi
+  if [ "$VENV_OK" -eq 0 ]; then
+    if [ -d "$VENV_DIR" ]; then
+      log "  existing venv at $VENV_DIR is broken; removing and recreating"
+      rm -rf "$VENV_DIR"
+    else
+      log "  creating venv at $VENV_DIR"
+    fi
+    if [ "$USE_UV" -eq 1 ]; then
+      if ! uv venv --quiet "$VENV_DIR"; then
+        err "FATAL: uv venv failed"
+        exit 1
+      fi
+    else
+      if ! python3 -m venv "$VENV_DIR"; then
+        err "FATAL: python3 -m venv failed"
+        exit 1
+      fi
+    fi
+  else
+    log "  reusing existing venv (pip is healthy)"
+  fi
+
+  # Install the deps into the venv. The venv's pip is unaffected
+  # by PEP 668 — a venv is exactly the escape hatch PEP 668 points
+  # users toward.
+  log "  installing deps: ${PY_DEPS[*]}"
+  if [ "$USE_UV" -eq 1 ]; then
+    # uv pip install respects VIRTUAL_ENV but is more reliable
+    # if we point at the venv explicitly.
+    if ! uv pip install --quiet --python "$VENV_DIR/bin/python" \
+         --upgrade "${PY_DEPS[@]}"; then
+      err "FATAL: uv pip install failed for runtime deps"
+      exit 1
+    fi
+  else
+    if ! "$VENV_DIR/bin/python" -m pip install --quiet --upgrade \
+         "${PY_DEPS[@]}"; then
+      err "FATAL: pip install failed for runtime deps in venv"
+      exit 1
+    fi
   fi
 fi
 
@@ -331,7 +453,66 @@ else
 fi
 
 # ===============================================================
-# Step 8: trailer with next-steps
+# Step 8: install the venv wrapper and rewrite SKILL.md to use it
+# ===============================================================
+# The bundled SKILL.md tells the agent to invoke the scripts via
+# `python3 ${SKILL_DIR}/scripts/find_install.py …`. That uses
+# python3 from PATH, which on a PEP 668 distro cannot import
+# cryptography / requests / google-auth etc. — exactly the reason
+# we created the venv above. We substitute every literal `python3`
+# with a path to a small wrapper that activates the venv before
+# invoking the real Python. SKILL.md is the only file we modify
+# post-install; the Python sources are byte-identical to the
+# bundle.
+log "installing venv wrapper and rewriting SKILL.md to use it"
+WRAPPER_PATH="$TARGET_DIR/bin/run-with-venv.sh"
+if [ "$DRY_RUN" -eq 1 ]; then
+  log "DRY RUN: skipping wrapper install and SKILL.md rewrite"
+else
+  mkdir -p "$TARGET_DIR/bin"
+  cat > "$WRAPPER_PATH" <<WRAPPER
+#!/usr/bin/env bash
+# Auto-generated by install-skill-finder.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+# Runs the skill-finder scripts with the per-user venv's Python
+# so that imports of cryptography / google-auth / requests /
+# pyyaml resolve correctly on PEP 668 distros.
+# If you move or delete \$VENV_DIR, regenerate this file by
+# re-running install-skill-finder.sh.
+VENV_PYTHON="$VENV_DIR/bin/python"
+if [ ! -x "\$VENV_PYTHON" ]; then
+  echo "[skill-finder] FATAL: venv Python missing: \$VENV_PYTHON" >&2
+  echo "[skill-finder] Re-run install-skill-finder.sh to rebuild the venv." >&2
+  exit 1
+fi
+exec "\$VENV_PYTHON" "\$@"
+WRAPPER
+  chmod +x "$WRAPPER_PATH"
+
+  # Rewrite SKILL.md: every `python3 \${SKILL_DIR}/scripts/<x>.py`
+  # invocation becomes `\${SKILL_DIR}/bin/run-with-venv.sh
+  # \${SKILL_DIR}/scripts/<x>.py`. We use a sentinel comment at
+  # the top of the rewritten file so a re-install (or future
+  # uninstaller) can recognise an already-rewritten SKILL.md
+  # and not double-rewrite it.
+  SKILL_MD="$TARGET_DIR/SKILL.md"
+  SENTINEL="<!-- venv-wrapper-rewritten by install-skill-finder.sh -->"
+  if ! grep -q "$SENTINEL" "$SKILL_MD" 2>/dev/null; then
+    # Use a temporary file so the rewrite is atomic (no half-
+    # rewritten SKILL.md if sed is interrupted).
+    REWRITE_TMP="$SKILL_MD.rewriting.$$"
+    {
+      echo "$SENTINEL"
+      sed 's|python3 \${SKILL_DIR}/scripts/|\${SKILL_DIR}/bin/run-with-venv.sh \${SKILL_DIR}/scripts/|g' "$SKILL_MD"
+    } > "$REWRITE_TMP"
+    mv "$REWRITE_TMP" "$SKILL_MD"
+    log "  rewrote $SKILL_MD to invoke scripts via the venv wrapper"
+  else
+    log "  SKILL.md already rewritten (sentinel present); skipping"
+  fi
+fi
+
+# ===============================================================
+# Step 9: trailer with next-steps
 # ===============================================================
 log "skill-finder $RELEASE_TAG installed successfully"
 log ""
@@ -341,8 +522,9 @@ log "       gcloud auth application-default login"
 log "  2. Export your catalog coordinates:"
 log "       export APIHUB_PROJECT=<your-gcp-project-id>"
 log "       export APIHUB_LOCATION=<your-apihub-region>"
-log "  3. Sanity check by listing the catalog:"
-log "       python3 $TARGET_DIR/scripts/list_skills.py \\"
+log "  3. Sanity check by listing the catalog (uses the venv):"
+log "       $WRAPPER_PATH \\"
+log "         $TARGET_DIR/scripts/list_skills.py \\"
 log "         --project \"\$APIHUB_PROJECT\" \\"
 log "         --location \"\$APIHUB_LOCATION\""
 log "  4. In your agent CLI, ask in natural language:"

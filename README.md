@@ -239,6 +239,8 @@ Both installers accept the same flags.
 | `--install-root <dir>` | (per-runtime default; see below) | Override the skills directory location. |
 | `--release <tag>` | `v0.1.0` | Git tag of the GitHub Release to download the bundle from. Pin this in CI / scripts. |
 | `--repo <owner/repo>` | `gsjurseth/skill-finder` | Override the source repo (useful for forks). |
+| `--venv-dir <dir>` | `~/.local/share/skill-finder/venv` | Where to create the per-user venv that holds the Python runtime deps. Shared by skill-finder and skill-publisher when both are installed. |
+| `--use-uv` | off | Use [uv](https://github.com/astral-sh/uv) to create the venv and install deps instead of the stdlib `venv` module. Requires `uv` on `PATH`. Faster (~10x) but adds an external dependency. |
 | `--force` | off | Overwrite an existing install in the target directory. |
 | `--dry-run` | off | Print what would happen without downloading, hashing, or installing. |
 
@@ -249,6 +251,36 @@ Default install roots per runtime:
 | `opencode` | `~/.config/opencode/skills` |
 | `gemini` | `~/.gemini/config/skills` |
 | `antigravity` | `~/.gemini/config/skills` |
+
+### Python environment
+
+The installers do **not** install dependencies into your system
+Python. On modern distros (Debian 12+, Ubuntu 23.04+, recent
+macOS Homebrew Python) that would fail anyway with PEP 668's
+`error: externally-managed-environment`. Instead, both installers
+create a per-user venv at `~/.local/share/skill-finder/venv` and
+install the 4 runtime deps there.
+
+The installer then writes a small wrapper script
+(`<install-root>/<skill>/bin/run-with-venv.sh`) and rewrites the
+installed `SKILL.md` to invoke scripts via that wrapper instead
+of `python3` directly. A sentinel comment at the top of the
+rewritten `SKILL.md` (`<!-- venv-wrapper-rewritten by … -->`)
+prevents double-rewriting on re-install.
+
+Prerequisites:
+
+- **Default (stdlib venv)**: needs `python3 >= 3.10` AND the
+  `python3-venv` package on Debian-family distros (Ubuntu, Debian,
+  Mint, etc.). The installer detects both `venv` and `ensurepip`
+  up front and gives an actionable error if either is missing.
+- **With `--use-uv`**: needs `uv` on `PATH`. Install instructions
+  at <https://github.com/astral-sh/uv>.
+
+The venv is reused across installer runs unless it's broken (no
+pip inside). To force a clean rebuild, delete `--venv-dir` and
+re-run the installer. To keep skill-finder and skill-publisher
+in separate venvs, pass different `--venv-dir` paths to each.
 
 ---
 
@@ -285,6 +317,10 @@ in `~/.bashrc` / `~/.zshrc` so they survive shell restarts.
 | Symptom | Diagnosis | Fix |
 |:---|:---|:---|
 | `curl: (22) The requested URL returned error: 404` during install | The release tag in the script does not match a tag that actually exists on this repo. | Pass `--release <existing-tag>` or upgrade the installer. |
+| `error: externally-managed-environment` during install | Your system Python enforces PEP 668. The installer is supposed to detect this and create a venv automatically; if you're seeing the raw error, you're probably running an old version of the installer. | Re-fetch the installer from the latest release. The current installer creates a per-user venv at `~/.local/share/skill-finder/venv` to side-step PEP 668. |
+| `FATAL: python3 stdlib 'venv' module not available` or `FATAL: python3 'ensurepip' module not available` | Debian-family distros split the `venv` module into a separate `python3-venv` package that isn't installed by default. | `sudo apt install python3-venv` (or `python3.NN-venv` for your specific Python version). Or pass `--use-uv` if you have [uv](https://github.com/astral-sh/uv) installed. |
+| `FATAL: --use-uv was passed but 'uv' is not on PATH` | You passed `--use-uv` but uv isn't installed. | Install uv from <https://github.com/astral-sh/uv>, or drop `--use-uv` to use the stdlib venv. |
+| `existing venv at … is broken; removing and recreating` (informational) | A previous installer run was interrupted before pip could be installed into the venv. The installer detected the half-built state and is rebuilding. | No action needed. |
 | `FATAL: bundle sha256 mismatch` (exit 3) | The bundle on GitHub is not the one the installer was built to trust. Either: (a) tampering, or (b) you're running an old installer against a new release. | Re-fetch the installer from the same release as the bundle. Do NOT bypass the check. |
 | `FATAL: trust root sha256 mismatch` (exit 3) | The bundle's embedded `trusted_pubkey.pem` is not the one the installer expects. This is the most serious failure — it means the signing-key trust root would have changed silently. | Do not install. File an issue. Cross-check the fingerprint with the maintainers out-of-band before proceeding. |
 | `match: NONE — zero skills met minimum keyword overlap` from `find_install.py` | Your query does not share any tokens with any catalog skill's `keywords` array. | Run `list_skills.py` to see what keywords are registered, and rephrase your query to include one of them. |

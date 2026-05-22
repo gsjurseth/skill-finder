@@ -29,6 +29,17 @@ set -u
 # line, and remap the exit code per the SKILL.md table.
 
 # ---------------------------------------------------------------
+# Python interpreter resolution.
+# By default we use `python3` from PATH. On PEP 668 distros that
+# Python cannot import the runtime deps (cryptography, requests,
+# google-auth, pyyaml). The install-skill-publisher.sh installer
+# sets PYTHON to the per-user venv's interpreter and exports it
+# in the SKILL.md wrapper invocation. Direct callers can also
+# override by exporting PYTHON before invoking publish.sh.
+# ---------------------------------------------------------------
+PYTHON="${PYTHON:-python3}"
+
+# ---------------------------------------------------------------
 # Argument parsing (no getopt — keep it portable to mac bash 3.2)
 # ---------------------------------------------------------------
 SRC=""
@@ -105,7 +116,7 @@ fi
 # ---------------------------------------------------------------
 read_manifest_field() {
   local field="$1"
-  python3 -c "
+  "$PYTHON" -c "
 import sys, yaml
 with open('${MANIFEST}') as fh:
     m = yaml.safe_load(fh)
@@ -175,7 +186,7 @@ run_step() {
 # ---------------------------------------------------------------
 run_step 1 "pack ${SRC} → ${OUT}" \
   env PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" \
-  python3 -m scripts.pack_skill \
+  "$PYTHON" -m scripts.pack_skill \
     --src "$SRC" \
     --out "$OUT" \
     --repo-root "$REPO_ROOT"
@@ -194,7 +205,7 @@ fi
 # ---------------------------------------------------------------
 run_step 2 "sign ${MANIFEST} (in-place)" \
   env PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" \
-  python3 -m scripts.sign_skill \
+  "$PYTHON" -m scripts.sign_skill \
     --manifest "$MANIFEST" \
     --zip "$OUT" \
     --priv-key "$PRIV_KEY" \
@@ -208,7 +219,7 @@ if [ $rc -ne 0 ]; then exit $rc; fi
 # ---------------------------------------------------------------
 run_step 3 "upload ${OUT} → gs://${BUCKET}/${OBJECT_NAME}" \
   env PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" \
-  python3 -m scripts.upload_skill \
+  "$PYTHON" -m scripts.upload_skill \
     --zip "$OUT" \
     --bucket "$BUCKET" \
     --object-name "$OBJECT_NAME"
@@ -222,7 +233,7 @@ if [ $rc -ne 0 ]; then exit $rc; fi
 # ---------------------------------------------------------------
 run_step 4 "register ${MANIFEST} → API hub ${PROJECT}/${LOCATION}" \
   env PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" \
-  python3 -m scripts.register_skill \
+  "$PYTHON" -m scripts.register_skill \
     --manifest "$MANIFEST" \
     --project "$PROJECT" \
     --location "$LOCATION"

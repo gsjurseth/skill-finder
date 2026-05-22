@@ -148,11 +148,18 @@ curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/ins
 ### Antigravity
 
 Antigravity has two skill scopes: **global** (available in every
-project) and **workspace** (scoped to the current project). Our
-installer targets the global scope by default — installs land in
-`~/.gemini/antigravity/skills/`. If you need a workspace-scoped
-install, pass `--install-root <project>/.gemini/antigravity/skills`
-explicitly.
+project) and **workspace** (scoped to the current project).
+
+| Scope | Path | Install with |
+|:---|:---|:---|
+| Global | `~/.gemini/antigravity/skills/` | `--runtime antigravity` (default) |
+| Workspace | `<project>/.agents/skills/` (cross-tool convention; note the plural `.agents`) | `--install-root <project>/.agents/skills` |
+
+The workspace path uses the **cross-tool `.agents/skills`
+convention** (plural), not an Antigravity-specific path. This is
+the same convention Gemini CLI uses for its workspace tier. The
+singular `.agent/skills` does NOT work — empirically verified
+against Gemini CLI 0.43.0.
 
 ```bash
 # 1. Install (global scope).
@@ -359,7 +366,7 @@ Default install roots per runtime:
 |:---|:---|
 | `opencode` | `~/.config/opencode/skills` |
 | `gemini` | `~/.gemini/skills` (per [Gemini CLI docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/skills.md)) |
-| `antigravity` | `~/.gemini/antigravity/skills` (global scope; pass `--install-root <project>/.gemini/antigravity/skills` for workspace scope) |
+| `antigravity` | `~/.gemini/antigravity/skills` (global scope; for workspace scope use `--install-root <project>/.agents/skills` — plural `.agents`, cross-tool convention) |
 
 ### Python environment
 

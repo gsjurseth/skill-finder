@@ -90,8 +90,12 @@ err() { echo "[install] $*" >&2; }
 if [ -z "$RUNTIME" ]; then
   if [ -d "$HOME/.config/opencode/skills" ]; then
     RUNTIME="opencode"
-  elif [ -d "$HOME/.gemini/antigravity/skills" ]; then
-    RUNTIME="antigravity"
+  elif [ -d "$HOME/.gemini/config/skills" ]; then
+    if [ -d "$HOME/.gemini/antigravity-browser-profile" ]; then
+      RUNTIME="antigravity"
+    else
+      RUNTIME="gemini"
+    fi
   elif [ -d "$HOME/.gemini" ]; then
     RUNTIME="gemini"
   else
@@ -102,8 +106,8 @@ fi
 
 case "$RUNTIME" in
   opencode)    DEFAULT_INSTALL_ROOT="$HOME/.config/opencode/skills" ;;
-  gemini)      DEFAULT_INSTALL_ROOT="$HOME/.gemini/skills" ;;
-  antigravity) DEFAULT_INSTALL_ROOT="$HOME/.gemini/antigravity/skills" ;;
+  gemini)      DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills" ;;
+  antigravity) DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills" ;;
   *)
     err "FATAL: --runtime must be opencode | gemini | antigravity (got: $RUNTIME)"
     exit 1

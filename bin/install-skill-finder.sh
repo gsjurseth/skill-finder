@@ -70,7 +70,7 @@ PINNED_TRUST_ROOT_SHA256="f5a74c687648ade0009846b8200eb04d035436bc229519f0f625be
 TRUST_ROOT_ED25519_FINGERPRINT="sha256:1ab8ea8cacee61509fe9b3e11e228ed3330b53b3cb999a6e500ce95927e059b7"
 
 # Python runtime deps. Kept in lockstep with the upstream
-# requirements.txt (DESIGN_DOC §5: capped at four packages).
+# requirements.txt (runtime tree is capped at four packages).
 PY_DEPS=(cryptography google-auth requests pyyaml)
 
 # ===============================================================
@@ -114,8 +114,15 @@ if [ -z "$RUNTIME" ]; then
   # falling back to opencode.
   if [ -d "$HOME/.config/opencode/skills" ]; then
     RUNTIME="opencode"
-  elif [ -d "$HOME/.gemini/antigravity/skills" ]; then
-    RUNTIME="antigravity"
+  elif [ -d "$HOME/.gemini/config/skills" ]; then
+    # Antigravity and Gemini CLI share ~/.gemini/config/skills as
+    # the canonical install root. Pick antigravity here only if a
+    # marker dir exists; otherwise fall through to gemini.
+    if [ -d "$HOME/.gemini/antigravity-browser-profile" ]; then
+      RUNTIME="antigravity"
+    else
+      RUNTIME="gemini"
+    fi
   elif [ -d "$HOME/.gemini" ]; then
     RUNTIME="gemini"
   else
@@ -129,10 +136,10 @@ case "$RUNTIME" in
     DEFAULT_INSTALL_ROOT="$HOME/.config/opencode/skills"
     ;;
   gemini)
-    DEFAULT_INSTALL_ROOT="$HOME/.gemini/skills"
+    DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills"
     ;;
   antigravity)
-    DEFAULT_INSTALL_ROOT="$HOME/.gemini/antigravity/skills"
+    DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills"
     ;;
   *)
     err "FATAL: --runtime must be opencode | gemini | antigravity (got: $RUNTIME)"

@@ -127,17 +127,19 @@ python3 ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
 
 ## Author flow: publishing your own skills
 
-To publish your own skills you need both `skill-publisher` and the
-four `scripts/*` Python modules it shells out to. The modules are
-NOT shipped in this minimal release — clone the upstream source
-repo (or vendor them yourself).
+To publish your own skills you need both the `skill-publisher`
+client and the four `scripts/*` Python modules it shells out to.
+Both ship in this repo — the easiest way to use them is to clone
+this repo and run from there.
 
 ### One-time setup
 
 ```bash
-# 1. Install skill-publisher.
-curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-publisher.sh \
-  | bash -s -- --runtime opencode
+# 1. Clone this repo (gives you skill-publisher + the four
+#    pack/sign/upload/register scripts in one shot).
+git clone https://github.com/gsjurseth/skill-finder.git
+cd skill-finder
+pip install -r requirements.txt
 
 # 2. Generate an ed25519 signing key (32 raw bytes).
 mkdir -p ~/.config/skill-signing
@@ -168,21 +170,29 @@ gcloud storage buckets create gs://<your-bucket> \
   --uniform-bucket-level-access
 
 # 4. Initialise the API hub attribute taxonomy (once per
-#    project; idempotent). This requires update_taxonomy.py
-#    from the upstream source repo:
+#    project; idempotent).
 python3 -m scripts.update_taxonomy \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
 ```
 
+If you only want the publishing client on a machine that already
+has a clone of the repo somewhere, the `install-skill-publisher.sh`
+script will install just the SKILL.md + publish.sh wrapper into
+your agent runtime — but `publish.sh` still needs to find the four
+Python modules. Point it at the repo via `--repo-root` or run from
+inside the repo checkout.
+
 ### Publish a skill
 
+From inside the repo checkout:
+
 ```bash
-# skill-publisher's publish.sh runs the full four-step pipeline:
+# publish.sh runs the full four-step pipeline:
 #   pack → sign → upload → register
 # Idempotent: re-running with identical inputs makes zero
 # mutating API calls.
-bash ~/.config/opencode/skills/skill-publisher/scripts/publish.sh \
+bash skills/skill-publisher/scripts/publish.sh \
   --src <path-to-your-skill-source-dir> \
   --bucket <your-gcs-bucket> \
   --priv-key ~/.config/skill-signing/signing.raw \
@@ -191,15 +201,16 @@ bash ~/.config/opencode/skills/skill-publisher/scripts/publish.sh \
 ```
 
 The `<your-skill-source-dir>` must contain at minimum a
-`SKILL.md` and a `manifest.yaml`. See the upstream source repo
-for the manifest schema and skill layout conventions.
+`SKILL.md` and a `manifest.yaml`. See `schema/skill-manifest.schema.yaml`
+for the full manifest schema and the two skills under `skills/`
+for example layouts.
 
 ### Registering YOUR signing key in skill-finder's trust root
 
-The `skill-finder` releases on this repo ship with a trust root
-pinned to *one* signing key (the maintainer's). If you want
-operators on your own machines to be able to install skills *you*
-sign, you have two options:
+The pre-built `skill-finder` releases on this repo ship with a
+trust root pinned to *one* signing key (the maintainer's). If you
+want operators on your own machines to be able to install skills
+*you* sign, you have two options:
 
 1. **Fork this repo**, replace
    `skills/skill-finder/keys/trusted_pubkey.pem` with your public
@@ -207,10 +218,10 @@ sign, you have two options:
    (the bundle sha256 and the trust root sha256), and cut your
    own release. Your operators install from your fork.
 
-2. **Multi-key trust root.** The upstream `skill-finder` source
-   already supports a single embedded key; extending it to a
-   PEM bundle of N trusted keys is a small change (~30 lines).
-   File an issue if you want this upstream.
+2. **Multi-key trust root.** The `skill-finder` source currently
+   supports a single embedded key; extending it to a PEM bundle
+   of N trusted keys is a small change (~30 lines). File an
+   issue if you want this in mainline.
 
 There is intentionally NO runtime "trust this key" command —
 that would invert the trust model. Trust roots only change at
@@ -236,8 +247,8 @@ Default install roots per runtime:
 | Runtime | Default install root |
 |:---|:---|
 | `opencode` | `~/.config/opencode/skills` |
-| `gemini` | `~/.gemini/skills` |
-| `antigravity` | `~/.gemini/antigravity/skills` |
+| `gemini` | `~/.gemini/config/skills` |
+| `antigravity` | `~/.gemini/config/skills` |
 
 ---
 
@@ -282,6 +293,48 @@ in `~/.bashrc` / `~/.zshrc` so they survive shell restarts.
 | `install: FAILED - bundled SKILL.md frontmatter YAML invalid` from `find_install.py` | The skill being installed has malformed YAML frontmatter in its bundled SKILL.md. This is an author-side bug. | Report to the skill's author. Do not retry. |
 
 ---
+
+## Repo layout
+
+```
+skill-finder/
+├── bin/                             # cold-start installer scripts
+│   ├── install-skill-finder.sh      # 2 hash pins: bundle + trust root
+│   └── install-skill-publisher.sh   # 1 hash pin: bundle
+├── skills/
+│   ├── skill-finder/                # discovery + install client (source)
+│   │   ├── SKILL.md
+│   │   ├── keys/trusted_pubkey.pem  # embedded trust root (the
+│   │   │                            # ed25519 public key signatures
+│   │   │                            # are checked against)
+│   │   └── scripts/
+│   │       ├── find_install.py      # discovery + install pipeline
+│   │       └── list_skills.py       # browse the catalog
+│   └── skill-publisher/             # author-side publishing tool (source)
+│       ├── SKILL.md
+│       ├── manifest.yaml            # template; signed in place at publish
+│       └── scripts/
+│           └── publish.sh           # orchestrates the 4-step pipeline
+├── scripts/                         # author-side Python modules invoked
+│   │                                # by publish.sh
+│   ├── pack_skill.py                # source dir → deterministic .skill zip
+│   ├── sign_skill.py                # manifest + zip → ed25519 signature
+│   ├── upload_skill.py              # .skill zip → GCS
+│   ├── register_skill.py            # signed manifest → API hub
+│   ├── update_taxonomy.py           # one-time attribute setup per project
+│   └── common/                      # canonicalisation, HTTP retry,
+│                                    # IAM preflight, manifest validator,
+│                                    # OpenCode permission resolver,
+│                                    # file-watcher probe, config loader
+├── schema/
+│   └── skill-manifest.schema.yaml   # JSON-Schema-ish reference (the
+│                                    # actual validator lives in
+│                                    # scripts/common/manifest_schema.py)
+├── requirements.txt                 # 4 runtime deps + pytest
+├── README.md                        # this file
+├── RELEASING.md                     # maintainer release flow
+└── LICENSE                          # Apache-2.0
+```
 
 ## License
 

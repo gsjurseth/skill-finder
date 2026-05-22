@@ -1,0 +1,43 @@
+# skill-publisher manifest — template form.
+#
+# The four cryptographic fields (zip_sha256, signing_key_id,
+# signature) are placeholders. They get rewritten in-place by
+# scripts/sign_skill.py during the publish pipeline.
+#
+# The gs_uri field is a template — replace <your-bucket> with the
+# GCS bucket you intend to upload the signed bundle to. The
+# bucket portion of this string MUST match the --bucket flag
+# passed to scripts/upload_skill.py, or skill-finder's attribute
+# cross-check will reject the install.
+#
+# The author field identifies the publishing organisation. It is
+# not security-critical (the signature is what proves provenance);
+# replace with your own identifier.
+author: your-org-name
+capabilities: []
+description: Publishes a local skill directory to the API hub catalog
+  and the GCS bundle store. Runs the four-step author pipeline end to
+  end, packing the source tree into a deterministic .skill zip,
+  signing the manifest with an ed25519 private key, uploading the zip
+  to GCS, and registering the signed manifest with API hub as an API
+  plus Version plus Spec triple along with its four attribute values.
+  Idempotent by design; re-running with identical inputs produces
+  byte-identical output. Includes a bootstrap mode for first-time
+  self-publication.
+gs_uri: gs://<your-bucket>/skill-publisher-0.1.0.skill
+keywords:
+- publish
+- skill
+- apihub
+- gcs
+- sign
+- ed25519
+- author
+license: Apache-2.0
+manifest_schema_version: '1'
+name: skill-publisher
+runtime_iam: []
+signature: PLACEHOLDER-WILL-BE-REWRITTEN-BY-SIGN-STEP
+signing_key_id: sha256:0000000000000000000000000000000000000000000000000000000000000000
+version: 0.1.0
+zip_sha256: 0000000000000000000000000000000000000000000000000000000000000000

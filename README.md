@@ -43,7 +43,11 @@ identically.
 ### OpenCode
 
 ```bash
-# 1. Install skill-finder.
+# 1. Install skill-finder. The installer creates a per-user venv
+#    at ~/.local/share/skill-finder/venv with the 4 runtime deps
+#    and rewrites the installed SKILL.md to invoke scripts via a
+#    wrapper that activates the venv. See "Python environment"
+#    below for details.
 curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
   | bash -s -- --runtime opencode
 
@@ -54,8 +58,10 @@ gcloud auth application-default login
 export APIHUB_PROJECT=<your-gcp-project-id>
 export APIHUB_LOCATION=<your-apihub-region>     # e.g. us-west1
 
-# 4. Sanity check.
-python3 ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
+# 4. Sanity check. Invoke list_skills.py via the venv wrapper
+#    (the installer printed this exact command on success).
+~/.config/opencode/skills/skill-finder/bin/run-with-venv.sh \
+  ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
 
@@ -74,7 +80,18 @@ python3 ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
 curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
   | bash -s -- --runtime gemini
 
-# 2-4. Same as OpenCode.
+# 2. Authenticate with Google Cloud.
+gcloud auth application-default login
+
+# 3. Point at the catalog.
+export APIHUB_PROJECT=<your-gcp-project-id>
+export APIHUB_LOCATION=<your-apihub-region>
+
+# 4. Sanity check (note the different install root vs OpenCode).
+~/.gemini/config/skills/skill-finder/bin/run-with-venv.sh \
+  ~/.gemini/config/skills/skill-finder/scripts/list_skills.py \
+  --project "$APIHUB_PROJECT" \
+  --location "$APIHUB_LOCATION"
 
 # 5. In a Gemini CLI session, ask in natural language. Gemini CLI
 #    does NOT support /reload-skills; instead, send a follow-up
@@ -89,7 +106,19 @@ curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/ins
 curl -fsSL https://raw.githubusercontent.com/gsjurseth/skill-finder/main/bin/install-skill-finder.sh \
   | bash -s -- --runtime antigravity
 
-# 2-4. Same as OpenCode.
+# 2. Authenticate with Google Cloud.
+gcloud auth application-default login
+
+# 3. Point at the catalog.
+export APIHUB_PROJECT=<your-gcp-project-id>
+export APIHUB_LOCATION=<your-apihub-region>
+
+# 4. Sanity check (Antigravity shares the install root with
+#    Gemini CLI at ~/.gemini/config/skills).
+~/.gemini/config/skills/skill-finder/bin/run-with-venv.sh \
+  ~/.gemini/config/skills/skill-finder/scripts/list_skills.py \
+  --project "$APIHUB_PROJECT" \
+  --location "$APIHUB_LOCATION"
 
 # 5. In an Antigravity session, ask in natural language. Same as
 #    Gemini CLI: no /reload-skills; send a follow-up to trigger
@@ -111,8 +140,11 @@ the catalog with anything important.
 #    signed by a different key.
 
 # 2. List the catalog. Every entry must show a signing_key_id
-#    that matches your trust root's fingerprint.
-python3 ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
+#    that matches your trust root's fingerprint. Use the venv
+#    wrapper (substitute the install root if you didn't pick
+#    OpenCode: Gemini CLI / Antigravity use ~/.gemini/config/skills).
+~/.config/opencode/skills/skill-finder/bin/run-with-venv.sh \
+  ~/.config/opencode/skills/skill-finder/scripts/list_skills.py \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
 
@@ -139,11 +171,23 @@ this repo and run from there.
 #    pack/sign/upload/register scripts in one shot).
 git clone https://github.com/gsjurseth/skill-finder.git
 cd skill-finder
-pip install -r requirements.txt
 
-# 2. Generate an ed25519 signing key (32 raw bytes).
+# 2. Create a venv for the runtime deps. On modern distros that
+#    enforce PEP 668 (Debian 12+, Ubuntu 23.04+, recent macOS
+#    Homebrew) you cannot `pip install` into system Python.
+#    The easiest path is to reuse the venv the installer creates
+#    so authoring and consuming share one runtime:
+python3 -m venv ~/.local/share/skill-finder/venv
+~/.local/share/skill-finder/venv/bin/pip install -r requirements.txt
+
+# (For convenience in the rest of these examples, point a shell
+# variable at the venv's Python so we don't have to repeat the
+# long path.)
+export AUTHOR_PYTHON=~/.local/share/skill-finder/venv/bin/python
+
+# 3. Generate an ed25519 signing key (32 raw bytes).
 mkdir -p ~/.config/skill-signing
-python3 <<'PY'
+"$AUTHOR_PYTHON" <<'PY'
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 import os, hashlib
@@ -164,14 +208,14 @@ print("signing key written:", path)
 print("public fingerprint: sha256:" + hashlib.sha256(pub_raw).hexdigest())
 PY
 
-# 3. Create a GCS bucket for your signed bundles.
+# 4. Create a GCS bucket for your signed bundles.
 gcloud storage buckets create gs://<your-bucket> \
   --location=<your-region> \
   --uniform-bucket-level-access
 
-# 4. Initialise the API hub attribute taxonomy (once per
-#    project; idempotent).
-python3 -m scripts.update_taxonomy \
+# 5. Initialise the API hub attribute taxonomy (once per
+#    project; idempotent). Run via the venv Python:
+"$AUTHOR_PYTHON" -m scripts.update_taxonomy \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
 ```
@@ -192,12 +236,25 @@ From inside the repo checkout:
 #   pack → sign → upload → register
 # Idempotent: re-running with identical inputs makes zero
 # mutating API calls.
+# publish.sh reads $PYTHON to find the interpreter; on PEP 668
+# distros you must export it to point at your venv.
+export PYTHON=~/.local/share/skill-finder/venv/bin/python
 bash skills/skill-publisher/scripts/publish.sh \
   --src <path-to-your-skill-source-dir> \
   --bucket <your-gcs-bucket> \
   --priv-key ~/.config/skill-signing/signing.raw \
   --project "$APIHUB_PROJECT" \
   --location "$APIHUB_LOCATION"
+
+# If you installed skill-publisher via install-skill-publisher.sh,
+# you can instead use the wrapper which exports $PYTHON for you:
+~/.config/opencode/skills/skill-publisher/bin/run-with-venv.sh \
+  --src <path-to-your-skill-source-dir> \
+  --bucket <your-gcs-bucket> \
+  --priv-key ~/.config/skill-signing/signing.raw \
+  --project "$APIHUB_PROJECT" \
+  --location "$APIHUB_LOCATION" \
+  --repo-root <path-to-this-repo-clone>
 ```
 
 The `<your-skill-source-dir>` must contain at minimum a

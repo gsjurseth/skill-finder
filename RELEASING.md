@@ -21,24 +21,36 @@ the GitHub Release matching their `DEFAULT_RELEASE_TAG`.
 
 ## Release checklist
 
-### 1. Pack the bundles
+### 0. Activate the maintainer venv
 
-Pack both skills from the **upstream source repo** (not from this
-release-only repo). The release-only repo deliberately does not
-contain the source code for the skills themselves; it contains
-only the installer scripts and the bundles get attached as
-release assets at tag time.
+The pack/sign scripts need cryptography, pyyaml, etc. On modern
+distros that enforce PEP 668 you cannot install them into system
+Python. Set up a venv once and reuse it for every release. The
+easiest path is to share the same venv the end-user installer
+creates:
 
 ```bash
-cd /path/to/upstream/source/repo
+cd /path/to/your/clone/of/skill-finder
+python3 -m venv ~/.local/share/skill-finder/venv 2>/dev/null || true
+~/.local/share/skill-finder/venv/bin/pip install -r requirements.txt
 
+# Point a shell variable at the venv Python so the rest of the
+# release commands are short.
+export PYTHON=~/.local/share/skill-finder/venv/bin/python
+```
+
+### 1. Pack the bundles
+
+Pack both skills from this repo's source tree.
+
+```bash
 # Skill-finder bundle.
-python3 -m scripts.pack_skill \
+"$PYTHON" -m scripts.pack_skill \
   --src skills/skill-finder \
   --out /tmp/skill-finder-<version>.skill
 
 # Skill-publisher bundle.
-python3 -m scripts.pack_skill \
+"$PYTHON" -m scripts.pack_skill \
   --src skills/skill-publisher \
   --out /tmp/skill-publisher-<version>.skill
 ```
@@ -54,25 +66,25 @@ key that matches the trust root inside the skill-finder bundle.
 
 ```bash
 # Sign skill-finder's manifest in place.
-python3 -m scripts.sign_skill \
+"$PYTHON" -m scripts.sign_skill \
   --manifest skills/skill-finder/manifest.yaml \
   --zip /tmp/skill-finder-<version>.skill \
   --priv-key ~/.config/skill-signing/signing.raw \
   --in-place
 
 # Re-pack after signing (the manifest changed).
-python3 -m scripts.pack_skill \
+"$PYTHON" -m scripts.pack_skill \
   --src skills/skill-finder \
   --out /tmp/skill-finder-<version>.skill
 
 # Repeat for skill-publisher.
-python3 -m scripts.sign_skill \
+"$PYTHON" -m scripts.sign_skill \
   --manifest skills/skill-publisher/manifest.yaml \
   --zip /tmp/skill-publisher-<version>.skill \
   --priv-key ~/.config/skill-signing/signing.raw \
   --in-place
 
-python3 -m scripts.pack_skill \
+"$PYTHON" -m scripts.pack_skill \
   --src skills/skill-publisher \
   --out /tmp/skill-publisher-<version>.skill
 ```

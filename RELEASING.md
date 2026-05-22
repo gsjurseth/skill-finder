@@ -39,6 +39,22 @@ python3 -m venv ~/.local/share/skill-finder/venv 2>/dev/null || true
 export PYTHON=~/.local/share/skill-finder/venv/bin/python
 ```
 
+### 0.5. Run the test suite
+
+Before touching any release artifact, run the unit tests. A failure
+here means the publishing pipeline is broken; do not proceed.
+
+```bash
+"$PYTHON" -m pytest tests/
+```
+
+Expected output: `N passed in <Ns>` with no failures or errors. If
+anything is red, fix it before continuing — the tests cover the
+SKILL.md frontmatter validator (added in v0.1.5) and would have
+caught both historical publish-side bugs.
+
+See `tests/README.md` for what's covered and how to add new tests.
+
 ### 1. Pack the bundles
 
 Pack both skills from this repo's source tree.
@@ -234,6 +250,7 @@ root.
 
 Before tagging:
 
+- [ ] `pytest tests/` passes (20+ tests, all green). Mandatory.
 - [ ] Both bundles pack deterministically (re-pack twice; sha256s
       match).
 - [ ] Both manifests pass `validate_manifest` (sign_skill does this

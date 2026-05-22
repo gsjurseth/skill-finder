@@ -484,6 +484,11 @@ skill-finder/
 │   └── skill-manifest.schema.yaml   # JSON-Schema-ish reference (the
 │                                    # actual validator lives in
 │                                    # scripts/common/manifest_schema.py)
+├── tests/                           # pytest unit tests
+│   ├── README.md                    # what's covered, how to run
+│   ├── conftest.py                  # sys.path setup
+│   └── test_pack_skill_frontmatter.py
+├── pytest.ini                       # test discovery config
 ├── requirements.txt                 # 4 runtime deps + pytest
 ├── README.md                        # this file
 ├── RELEASING.md                     # maintainer release flow

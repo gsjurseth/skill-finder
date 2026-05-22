@@ -7,7 +7,7 @@ description: Publishes a local skill directory to the API hub catalog and the GC
   as an API plus Version plus Spec triple along with its four attribute values. Idempotent
   by design; re-running with identical inputs produces byte-identical output. Includes
   a bootstrap mode for first-time self-publication.
-gs_uri: gs://your-bucket-name/skill-publisher-0.1.1.skill
+gs_uri: gs://your-bucket-name/skill-publisher-0.1.2.skill
 keywords:
 - publish
 - skill
@@ -20,7 +20,7 @@ license: Apache-2.0
 manifest_schema_version: '1'
 name: skill-publisher
 runtime_iam: []
-signature: BLkzq2YOCj8ZSqc8RauQVj565Bo+G9DLYyP2rGNE7cezkrA7+PwW024v14iV9yRFf2b+wmOOCS5aONf3eMMdBQ==
+signature: cU6jO1InlEa2avJdoUsNp2l4eoeoGcRfkfoRY26Z6BhnhxGNmR81p8VsPe2Iv+bX0CyVuvJq5vtodbcjFf6XDw==
 signing_key_id: sha256:1ab8ea8cacee61509fe9b3e11e228ed3330b53b3cb999a6e500ce95927e059b7
-version: 0.1.1
-zip_sha256: 54519e7776951f09a8f53b1920dae7bfcc148c9df8af46ae77a493a6d376a950
+version: 0.1.2
+zip_sha256: 666e8a46f71449b0d7e919a22e20bff42ad2915d879e552b61db0c6a8c97e851

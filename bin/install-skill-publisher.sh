@@ -45,14 +45,14 @@ set -u
 # ===============================================================
 # Release pins — UPDATE THESE WITH EVERY RELEASE
 # ===============================================================
-DEFAULT_RELEASE_TAG="v0.1.1"
+DEFAULT_RELEASE_TAG="v0.1.2"
 DEFAULT_REPO="gsjurseth/skill-finder"
 
-BUNDLE_FILENAME="skill-publisher-0.1.1.skill"
+BUNDLE_FILENAME="skill-publisher-0.1.2.skill"
 
 # sha256 of the .skill zip itself. Recompute at release time:
 #   sha256sum skill-publisher-0.1.0.skill
-PINNED_BUNDLE_SHA256="4082abdf6c07efaf8be1db73601489a9d1ae5a12926dd437d4fc11899bc34f1c"
+PINNED_BUNDLE_SHA256="bd84afc1cca876159741afb807875d0bb8fc5b9261e06e0a683f464ca6e46ce0"
 
 # Python runtime deps used by the four scripts/* modules that
 # publish.sh invokes. Same set as skill-finder; kept independent
@@ -120,8 +120,8 @@ case "$RUNTIME" in
   opencode)    DEFAULT_INSTALL_ROOT="$HOME/.config/opencode/skills" ;;
   # Gemini CLI: canonical user-skills root per docs/cli/skills.md.
   gemini)      DEFAULT_INSTALL_ROOT="$HOME/.gemini/skills" ;;
-  # Antigravity: undocumented; override with --install-root if wrong.
-  antigravity) DEFAULT_INSTALL_ROOT="$HOME/.gemini/config/skills" ;;
+  # Antigravity global install root.
+  antigravity) DEFAULT_INSTALL_ROOT="$HOME/.gemini/antigravity/skills" ;;
   *)
     err "FATAL: --runtime must be opencode | gemini | antigravity (got: $RUNTIME)"
     exit 1

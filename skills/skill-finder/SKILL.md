@@ -14,6 +14,39 @@ metadata:
 
 # skill-finder
 
+## ⚠️ Runtime requirements (read this first)
+
+This skill **requires** its bundled venv wrapper. The Python
+scripts depend on `cryptography`, `google-auth`, `requests`, and
+`pyyaml`, which are installed into a per-user venv by the
+installer (`bin/install-skill-finder.sh`). They are **not**
+available to the system `python3`.
+
+**Always invoke scripts via the wrapper, never via bare
+`python3`:**
+
+```bash
+# CORRECT - invokes the venv Python via the wrapper:
+${SKILL_DIR}/bin/run-with-venv.sh ${SKILL_DIR}/scripts/<script>.py <args>
+
+# WRONG - system python3 will hit ModuleNotFoundError:
+python3 ${SKILL_DIR}/scripts/<script>.py <args>
+```
+
+The `Command` blocks in this file use the wrapper form. Do not
+"simplify" them to `python3 …` — the scripts will fail with
+`ModuleNotFoundError: No module named 'cryptography'` (or similar)
+and the agent will then waste a turn debugging a configuration
+issue that doesn't exist.
+
+If the wrapper at `${SKILL_DIR}/bin/run-with-venv.sh` is missing,
+the skill was installed by a pre-v0.1.4 installer. Re-run
+`bin/install-skill-finder.sh` to regenerate the wrapper. The
+scripts themselves also detect this case at startup and emit an
+actionable error pointing back here.
+
+---
+
 This skill has **two modes**. Choose the one that fits the user's
 intent:
 
@@ -34,7 +67,8 @@ runtimes. Pick the invocation path that matches the runtime:
 | Runtime | How you invoke the scripts |
 |:--------|:---------------------------|
 | **OpenCode** | Use the `!`bash`` injection blocks below. OpenCode auto-executes them on SKILL.md load. |
-| **Antigravity / Gemini CLI** | Use your bash tool. Run the exact command from the matching `Command` block — substitute `${SKILL_DIR}` with the real install path (typically `~/.gemini/config/skills/skill-finder`), substitute `${ARGUMENTS}` with the user's verbatim query, and `${APIHUB_PROJECT}` / `${APIHUB_LOCATION}` with the values from the shell environment. |
+| **Gemini CLI** | Use your bash tool. Run the exact command from the matching `Command` block — substitute `${SKILL_DIR}` with the install path (`~/.gemini/skills/skill-finder` for global installs; `<project>/.agents/skills/skill-finder` for workspace installs), substitute `${ARGUMENTS}` with the user's verbatim query, and `${APIHUB_PROJECT}` / `${APIHUB_LOCATION}` with the values from the shell environment. |
+| **Antigravity** | Same as Gemini CLI but `${SKILL_DIR}` is `~/.gemini/antigravity/skills/skill-finder` for global installs (or `<project>/.agents/skills/skill-finder` for workspace installs). |
 | **Any other runtime** | Same as Antigravity / Gemini CLI: invoke via whatever bash mechanism the runtime provides. |
 
 ---

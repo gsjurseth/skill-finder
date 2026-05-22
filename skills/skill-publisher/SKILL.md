@@ -20,6 +20,40 @@ metadata:
 
 # skill-publisher
 
+## ⚠️ Runtime requirements (read this first)
+
+This skill **requires** its bundled venv wrapper. `publish.sh`
+internally invokes the four `scripts/*` Python modules
+(`pack_skill`, `sign_skill`, `upload_skill`, `register_skill`),
+which depend on `cryptography`, `google-auth`, `requests`, and
+`pyyaml`. Those are installed into a per-user venv by the
+installer (`bin/install-skill-publisher.sh`). They are **not**
+available to the system `python3`.
+
+**Always invoke `publish.sh` via the wrapper, never via bare
+`bash`:**
+
+```bash
+# CORRECT - the wrapper exports PYTHON to point at the venv:
+${SKILL_DIR}/bin/run-with-venv.sh <args>
+
+# WRONG - publish.sh will fall back to system python3 which
+# will hit ModuleNotFoundError mid-pipeline:
+bash ${SKILL_DIR}/scripts/publish.sh <args>
+```
+
+The `Command` blocks in this file use the wrapper form. Do not
+"simplify" them — `publish.sh` reads `$PYTHON` from its
+environment and the wrapper is the only thing that sets it
+correctly. If you invoke `publish.sh` directly, the four
+sub-scripts will fail with `ModuleNotFoundError`.
+
+If the wrapper at `${SKILL_DIR}/bin/run-with-venv.sh` is missing,
+the skill was installed by a pre-v0.1.4 installer. Re-run
+`bin/install-skill-publisher.sh` to regenerate the wrapper.
+
+---
+
 Use this skill when the user asks to "publish a skill", "ship this
 skill to API hub", "upload and register my skill", "release the
 skill", or any close paraphrase. This is the single entry point for
@@ -64,7 +98,8 @@ behaviour and stdout contract are identical.
 | Runtime | How you invoke the publish script |
 |:--------|:----------------------------------|
 | **OpenCode** | Use the `!`bash`` injection blocks below. OpenCode auto-executes them on SKILL.md load. |
-| **Antigravity / Gemini CLI** | Use your bash tool. Run the matching `Command` block, substituting `${SKILL_DIR}` with the install path (typically `~/.gemini/config/skills/skill-publisher`) and the operator-controlled env vars from the table above. |
+| **Gemini CLI** | Use your bash tool. Run the matching `Command` block, substituting `${SKILL_DIR}` with the install path (`~/.gemini/skills/skill-publisher` for global; `<project>/.agents/skills/skill-publisher` for workspace) and the operator-controlled env vars from the table above. |
+| **Antigravity** | Same as Gemini CLI but `${SKILL_DIR}` is `~/.gemini/antigravity/skills/skill-publisher` for global installs. |
 | **Any other runtime** | Same as Antigravity / Gemini CLI: invoke via whatever bash mechanism the runtime provides. |
 
 ---

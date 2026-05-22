@@ -33,6 +33,47 @@ import sys
 from pathlib import Path
 from urllib.parse import quote_plus
 
+# =============================================================
+# Venv preflight. See find_install.py for the full rationale --
+# this is the same pattern: detect the "invoked with system
+# python3 instead of the venv wrapper" failure mode up front and
+# exit 78 (BSD sysexits.h EX_CONFIG) with an actionable message.
+# list_skills.py needs google.auth and requests transitively
+# via common.http_retry / common.config; PyYAML is not used here,
+# and cryptography is not loaded by list_skills directly. We
+# still probe the full venv dep set because (a) a partial venv
+# is itself a bug worth surfacing, and (b) consistency with
+# find_install.py makes the agent's behaviour predictable.
+# =============================================================
+_VENV_DEPS = ("yaml", "cryptography", "google.auth", "requests")
+_VENV_EX_CONFIG = 78
+_missing_dep: str | None = None
+_dep: str = ""  # noqa: appease static checker; rebound in loop
+for _dep in _VENV_DEPS:
+    try:
+        __import__(_dep)
+    except ImportError:
+        _missing_dep = _dep
+        break
+if _missing_dep is not None:
+    _SKILL_DIR = Path(__file__).resolve().parent.parent
+    _WRAPPER = _SKILL_DIR / "bin" / "run-with-venv.sh"
+    sys.stderr.write(
+        "[skill-finder] FATAL: this script requires the bundled "
+        "venv wrapper.\n"
+        f"  Missing module: {_missing_dep!r}\n"
+        f"  You invoked: python3 {sys.argv[0]}\n"
+        f"  You should invoke:\n"
+        f"      {_WRAPPER} {sys.argv[0]} <args>\n"
+        "  The wrapper activates the per-user venv created by\n"
+        "  install-skill-finder.sh, which contains the four\n"
+        "  required dependencies. The system python3 does not.\n"
+        "  If the wrapper is missing, re-run\n"
+        "  bin/install-skill-finder.sh to regenerate it.\n"
+    )
+    sys.exit(_VENV_EX_CONFIG)
+del _VENV_DEPS, _missing_dep, _dep
+
 # Dual import: production .skill zip layout has no
 # `scripts/` parent package; bare `common.*` resolves via the
 # sys.path.insert below. Dev/test layout uses `scripts.common.*`

@@ -52,6 +52,53 @@ import uuid
 import zipfile
 from pathlib import Path
 
+# =============================================================
+# Venv preflight. The third-party imports below (yaml,
+# cryptography, google-auth, requests) live in the venv that the
+# installer creates at ~/.local/share/skill-finder/venv. If this
+# script is invoked with the system python3 instead of the venv
+# wrapper, those imports raise ModuleNotFoundError with no useful
+# context -- the agent sees a generic traceback and has no way to
+# know it should be using the wrapper.
+#
+# Detect that failure mode here and exit 78 with a single
+# actionable message pointing the agent at the wrapper. Exit code
+# 78 is the BSD sysexits.h EX_CONFIG value ("configuration
+# error"); we picked it to disambiguate from the other exit codes
+# this script uses (0, 1, 2). The agent can read 78 and recognise
+# "wrong invocation" vs "real failure".
+# =============================================================
+_VENV_DEPS = ("yaml", "cryptography", "google.auth", "requests")
+_VENV_EX_CONFIG = 78
+_missing_dep: str | None = None
+_dep: str = ""  # noqa: appease static checker; rebound in loop
+for _dep in _VENV_DEPS:
+    try:
+        __import__(_dep)
+    except ImportError:
+        _missing_dep = _dep
+        break
+if _missing_dep is not None:
+    _SKILL_DIR = Path(__file__).resolve().parent.parent
+    _WRAPPER = _SKILL_DIR / "bin" / "run-with-venv.sh"
+    sys.stderr.write(
+        "[skill-finder] FATAL: this script requires the bundled "
+        "venv wrapper.\n"
+        f"  Missing module: {_missing_dep!r}\n"
+        f"  You invoked: python3 {sys.argv[0]}\n"
+        f"  You should invoke:\n"
+        f"      {_WRAPPER} {sys.argv[0]} <args>\n"
+        "  The wrapper activates the per-user venv created by\n"
+        "  install-skill-finder.sh, which contains the four\n"
+        "  required dependencies. The system python3 does not.\n"
+        "  If the wrapper is missing, re-run\n"
+        "  bin/install-skill-finder.sh to regenerate it.\n"
+    )
+    sys.exit(_VENV_EX_CONFIG)
+# Cleanup loop-local names so they don't pollute the module
+# namespace.
+del _VENV_DEPS, _missing_dep, _dep
+
 import yaml
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
